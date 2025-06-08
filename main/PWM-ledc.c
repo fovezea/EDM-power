@@ -1,0 +1,146 @@
+#include "driver/ledc.h"
+#include "esp_rom_sys.h" // For ets_delay_us
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "freertos/queue.h"
+// Define your half-bridge pins and dead time (in microseconds)
+#define HALFBRIDGE_HIGH_GPIO   16
+#define HALFBRIDGE_LOW_GPIO    17
+#define PWM_FREQ_HZ            20000
+#define PWM_RES_BITS           LEDC_TIMER_10_BIT
+#define DEAD_TIME_US           2   // 2us dead time (adjust as needed)
+
+//extern volatile int g_pwm_adc_value ; // Global variable for ADC value but replaced with queue
+extern QueueHandle_t pwm_adc_queue;
+
+void halfbridge_pwm_task(void *pvParameters)
+{
+    // Configure LEDC timer
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_HIGH_SPEED_MODE,
+        .timer_num        = LEDC_TIMER_0,
+        .duty_resolution  = PWM_RES_BITS,
+        .freq_hz          = PWM_FREQ_HZ,
+        .clk_cfg          = LEDC_AUTO_CLK,
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    // Configure channel for HIGH side
+    ledc_channel_config_t ledc_channel_high = {
+        .gpio_num       = HALFBRIDGE_HIGH_GPIO,
+        .speed_mode     = LEDC_HIGH_SPEED_MODE,
+        .channel        = LEDC_CHANNEL_0,
+        .timer_sel      = LEDC_TIMER_0,
+        .duty           = 0,
+        .hpoint         = 0,
+        .flags.output_invert = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_high));
+
+    // Configure channel for LOW side
+    ledc_channel_config_t ledc_channel_low = {
+        .gpio_num       = HALFBRIDGE_LOW_GPIO,
+        .speed_mode     = LEDC_HIGH_SPEED_MODE,
+        .channel        = LEDC_CHANNEL_1,
+        .timer_sel      = LEDC_TIMER_0,
+        .duty           = 0,
+        .hpoint         = 0,
+        .flags.output_invert = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_low));
+
+    // Calculate duty and dead time in ticks
+   // uint32_t max_duty = (1 << PWM_RES_BITS) - 1;
+   // uint32_t dead_ticks = (PWM_FREQ_HZ * DEAD_TIME_US) / 1000000 * max_duty / PWM_FREQ_HZ;
+   // uint32_t main_duty = max_duty / 2 - dead_ticks; // 50% duty minus dead time
+
+
+    // User-configurable ON times in percent (0-100)
+    int high_on_percent = 40; // Example: 40% ON time for HIGH side
+    int low_on_percent  = 40; // Example: 40% ON time for LOW side
+
+    // Calculate duty and dead time in ticks
+    uint32_t max_duty = (1 << PWM_RES_BITS) - 1;
+    uint32_t high_on_ticks = (max_duty * high_on_percent) / 100;
+    uint32_t low_on_ticks  = (max_duty * low_on_percent) / 100;
+    //uint32_t dead_ticks = (PWM_FREQ_HZ * DEAD_TIME_US) / 1000000 * max_duty / PWM_FREQ_HZ;
+
+    int pwm_adc_value = 0;
+
+    
+    // Main loop for PWM control
+     while (1) {
+        xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
+
+        if (pwm_adc_value > 3500) {
+            ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
+            ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
+            continue;
+        }
+
+        // HIGH side ON, LOW side OFF
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, high_on_ticks);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1);
+        esp_rom_delay_us((1000000 * high_on_percent / 100 / PWM_FREQ_HZ) - DEAD_TIME_US);
+
+        // Both OFF for dead time
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+        esp_rom_delay_us(DEAD_TIME_US);
+
+        // LOW side ON, HIGH side OFF
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, low_on_ticks);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1);
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+        esp_rom_delay_us((1000000 * low_on_percent / 100 / PWM_FREQ_HZ) - DEAD_TIME_US);
+
+        // Both OFF for dead time
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1);
+        esp_rom_delay_us(DEAD_TIME_US);
+    }
+/*
+    while (1) {
+
+// Wait for new ADC value, or use last if timeout
+        xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
+
+        if (pwm_adc_value > 3500) {
+            ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
+            ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
+            //vTaskDelay(pdMS_TO_TICKS(10));  //optional delay to allow for stopping
+            continue; // Skip PWM switching if ADC is too high
+        }
+
+        // HIGH side ON, LOW side OFF
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, main_duty);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1);
+        esp_rom_delay_us((1000000 / PWM_FREQ_HZ / 2) - DEAD_TIME_US);
+
+        // Both OFF for dead time
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+        esp_rom_delay_us(DEAD_TIME_US);
+
+        // LOW side ON, HIGH side OFF
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, main_duty);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1);
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+        esp_rom_delay_us((1000000 / PWM_FREQ_HZ / 2) - DEAD_TIME_US);
+
+        // Both OFF for dead time
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1);
+        esp_rom_delay_us(DEAD_TIME_US);
+    }
+        */
+}
+
+   
