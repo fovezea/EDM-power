@@ -74,7 +74,7 @@ void halfbridge_pwm_task(void *pvParameters)
     //uint32_t dead_ticks = (PWM_FREQ_HZ * DEAD_TIME_US) / 1000000 * max_duty / PWM_FREQ_HZ;
 
    // int pwm_adc_value = 0;
-    int adc_reading = 0; // Variable to hold ADC reading
+    int adc_reading = 2048; // Variable to hold ADC reading
     
     // Main loop for PWM control
      while (1) {
@@ -107,7 +107,7 @@ void halfbridge_pwm_task(void *pvParameters)
         esp_rom_delay_us(ADC_READ_DELAY_MS);
          ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &adc_reading));
         //update the queue with the ADC reading
-        xQueueOverwrite(pwm_adc_queue, &adc_reading); // Overwrite with latest value
+        //xQueueOverwrite(pwm_adc_queue, &adc_reading); // Overwrite with latest value
          
         esp_rom_delay_us((1000000 * low_on_percent / 100 / PWM_FREQ_HZ) - DEAD_TIME_US - ADC_READ_DELAY_MS);
 
@@ -115,8 +115,9 @@ void halfbridge_pwm_task(void *pvParameters)
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1);
         esp_rom_delay_us(DEAD_TIME_US);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 
-}
+    }
 
    
