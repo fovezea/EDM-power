@@ -43,7 +43,7 @@ static esp_adc_cal_characteristics_t adc_chars;
 const static uint32_t accel_samples = 500;
 const static uint32_t decel_samples = 500;
 
-static adc_oneshot_unit_handle_t adc_handle; // Add this global
+extern adc_oneshot_unit_handle_t adc_handle; 
 //volatile int g_pwm_adc_value = 0;
 
 extern void halfbridge_pwm_task(void *pvParameters); // Forward declaration of the PWM task
@@ -52,23 +52,27 @@ extern void halfbridge_pwm_task(void *pvParameters); // Forward declaration of t
 void stepper_task(void *pvParameters)
 {
    
-
+    int pwm_adc_value = 0; // Local variable to hold ADC value
 
 
     while (1) {
-        int adc_reading = 0;
-        ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &adc_reading));
+       // int adc_reading = 0;
+
+
+        xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
+
+      //  ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &adc_reading));
         //update the queue with the ADC reading
-        xQueueOverwrite(pwm_adc_queue, &adc_reading); // Overwrite with latest value
-        uint32_t voltage = esp_adc_cal_raw_to_voltage(adc_reading, &adc_chars);
-        ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", adc_reading, voltage);
+      //  xQueueOverwrite(pwm_adc_queue, &adc_reading); // Overwrite with latest value
+        uint32_t voltage = esp_adc_cal_raw_to_voltage(pwm_adc_value, &adc_chars);
+        ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", pwm_adc_value, voltage);
 
         // Hysteresis dead zone
         int center = 2048;
         int lower = center - (HYSTERESIS_WIDTH / 2);
         int upper = center + (HYSTERESIS_WIDTH / 2);
 
-        if (adc_reading > lower && adc_reading < upper) {
+        if (pwm_adc_value > lower && pwm_adc_value < upper) {
             // In dead zone: disable motor
             gpio_set_level(STEP_MOTOR_GPIO_EN, !STEP_MOTOR_ENABLE_LEVEL); // disable
             ESP_LOGI(TAG, "In dead zone: Motor stopped");
@@ -86,10 +90,10 @@ void stepper_task(void *pvParameters)
             // Speed mapping: 0-4095 ADC reading to 100-1500 Hz speed
             // Ensure speed is at least 100 Hz
             // and at most 1500 Hz
-            uint32_t speed_hz = (adc_reading * 1500) / 4095;
+            uint32_t speed_hz = (pwm_adc_value * 1500) / 4095;
             if (speed_hz < 100) speed_hz = 100;
 
-            if (adc_reading < lower) {
+            if (pwm_adc_value < lower) {
                 gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
                 ESP_LOGI(TAG, "Direction: Counter-clockwise");
             } else {
