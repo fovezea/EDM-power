@@ -134,8 +134,8 @@ stepper_motor_curve_encoder_config_t decel_cfg = {
 
      while (1) {
         xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
-       // uint32_t voltage = esp_adc_cal_raw_to_voltage(pwm_adc_value, &adc_chars);
-     //   ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", pwm_adc_value, voltage);
+        uint32_t voltage = esp_adc_cal_raw_to_voltage(pwm_adc_value, &adc_chars);
+        ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", pwm_adc_value, voltage);
 
         // Hysteresis dead zone
         int center = 2048;
