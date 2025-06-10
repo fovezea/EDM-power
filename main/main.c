@@ -40,8 +40,8 @@ static rmt_encoder_handle_t uniform_motor_encoder;
 static rmt_encoder_handle_t decel_motor_encoder;
 static rmt_transmit_config_t tx_config;
 static esp_adc_cal_characteristics_t adc_chars;
-const static uint32_t accel_samples = 500;
-const static uint32_t decel_samples = 500;
+//const static uint32_t accel_samples = 500;
+//const static uint32_t decel_samples = 500;
 
 extern adc_oneshot_unit_handle_t adc_handle; 
 //volatile int g_pwm_adc_value = 0;
@@ -51,19 +51,25 @@ extern void halfbridge_pwm_task(void *pvParameters); // Forward declaration of t
 // The task function
 void stepper_task(void *pvParameters)
 {
-   
+ 
+
+stepper_motor_curve_encoder_config_t accel_cfg = {
+    .resolution = STEP_MOTOR_RESOLUTION_HZ,
+    .sample_points = 500,
+    .start_freq_hz = 500,
+    .end_freq_hz = 1500,
+};
+stepper_motor_curve_encoder_config_t decel_cfg = {
+    .resolution = STEP_MOTOR_RESOLUTION_HZ,
+    .sample_points = 500,
+    .start_freq_hz = 1500,
+    .end_freq_hz = 500,
+};
     int pwm_adc_value = 0; // Local variable to hold ADC value
+    bool rmt_enabled = true; // Assume enabled at startup (since enabled in app_main)
 
-
-    while (1) {
-       // int adc_reading = 0;
-
-
-        xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
-
-      //  ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &adc_reading));
-        //update the queue with the ADC reading
-      //  xQueueOverwrite(pwm_adc_queue, &adc_reading); // Overwrite with latest value
+     while (1) {
+       // xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
         uint32_t voltage = esp_adc_cal_raw_to_voltage(pwm_adc_value, &adc_chars);
         ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", pwm_adc_value, voltage);
 
@@ -76,20 +82,20 @@ void stepper_task(void *pvParameters)
             // In dead zone: disable motor
             gpio_set_level(STEP_MOTOR_GPIO_EN, !STEP_MOTOR_ENABLE_LEVEL); // disable
             ESP_LOGI(TAG, "In dead zone: Motor stopped");
-            // Disable RMT channel to stop sending pulses
-             ESP_ERROR_CHECK(rmt_disable(motor_chan));
-        ESP_LOGI(TAG, "In dead zone: Motor stopped (RMT disabled)");
+            // Disable RMT channel to stop sending pulses, only if enabled
+            if (rmt_enabled) {
+                ESP_ERROR_CHECK(rmt_disable(motor_chan));
+                rmt_enabled = false;
+                ESP_LOGI(TAG, "In dead zone: Motor stopped (RMT disabled)");
+            }
         } else {
-            // Outside dead zone: enable motor and set speed
-            ESP_ERROR_CHECK(rmt_enable(motor_chan));
-            ESP_LOGI(TAG, "Outside dead zone: Motor enabled (RMT enabled)");
-            // Map ADC reading to speed in Hz
-            // Assuming adc_reading is in the range of 0-4095 (12-bit ADC)
-            // and we want to map it to a speed range of 100 Hz to 1500 Hz
-            // Adjust the mapping as needed
-            // Speed mapping: 0-4095 ADC reading to 100-1500 Hz speed
-            // Ensure speed is at least 100 Hz
-            // and at most 1500 Hz
+            // Outside dead zone: enable motor and set speed, only if disabled
+            if (!rmt_enabled) {
+                ESP_ERROR_CHECK(rmt_enable(motor_chan));
+                rmt_enabled = true;
+                ESP_LOGI(TAG, "Outside dead zone: Motor enabled (RMT enabled)");
+            }
+            // ...existing code for speed/direction/transmit...
             uint32_t speed_hz = (pwm_adc_value * 1500) / 4095;
             if (speed_hz < 100) speed_hz = 100;
 
@@ -107,12 +113,22 @@ void stepper_task(void *pvParameters)
             ESP_LOGI(TAG, "Transmitting motor commands in three phases: acceleration, uniform speed, and deceleration");
 
             tx_config.loop_count = 0;
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &accel_samples, sizeof(accel_samples), &tx_config));
+            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &accel_samples, sizeof(accel_samples), &tx_config));
+            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, NULL, 0, &tx_config));
+           // ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &accel_cfg, sizeof(accel_cfg), &tx_config));
+            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &accel_samples, sizeof(accel_samples), &tx_config));
+
             tx_config.loop_count = 5000;
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &speed_hz, sizeof(speed_hz), &tx_config));
+
+            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &speed_hz, sizeof(speed_hz), &tx_config));
+            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &accel_cfg, sizeof(accel_cfg), &tx_config));
+            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &speed_hz, sizeof(speed_hz), &tx_config));
             tx_config.loop_count = 0;
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &decel_samples, sizeof(decel_samples), &tx_config));
-            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &decel_samples, sizeof(decel_samples), &tx_config));
+           // ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, NULL, 0, &tx_config));
+            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &decel_cfg, sizeof(decel_cfg), &tx_config));
+           // ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &decel_samples, sizeof(decel_samples), &tx_config));
+            //ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
         }
 
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -123,7 +139,7 @@ void stepper_task(void *pvParameters)
 void app_main(void)
 {
     
-    pwm_adc_queue = xQueueCreate(4, sizeof(int));
+   // pwm_adc_queue = xQueueCreate(4, sizeof(int));
     
     ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
     gpio_config_t en_dir_gpio_config = {
@@ -134,7 +150,7 @@ void app_main(void)
     ESP_ERROR_CHECK(gpio_config(&en_dir_gpio_config));
 
     ESP_LOGI(TAG, "Create RMT TX channel");
-    rmt_channel_handle_t motor_chan = NULL;
+    //rmt_channel_handle_t motor_chan = NULL;
     rmt_tx_channel_config_t tx_chan_config = {
         .clk_src = RMT_CLK_SRC_DEFAULT, // select clock source
         .gpio_num = STEP_MOTOR_GPIO_STEP,
@@ -156,13 +172,13 @@ void app_main(void)
         .start_freq_hz = 500,
         .end_freq_hz = 1500,
     };
-    rmt_encoder_handle_t accel_motor_encoder = NULL;
+    //rmt_encoder_handle_t accel_motor_encoder = NULL;
     ESP_ERROR_CHECK(rmt_new_stepper_motor_curve_encoder(&accel_encoder_config, &accel_motor_encoder));
 
     stepper_motor_uniform_encoder_config_t uniform_encoder_config = {
         .resolution = STEP_MOTOR_RESOLUTION_HZ,
     };
-    rmt_encoder_handle_t uniform_motor_encoder = NULL;
+    //rmt_encoder_handle_t uniform_motor_encoder = NULL;
     ESP_ERROR_CHECK(rmt_new_stepper_motor_uniform_encoder(&uniform_encoder_config, &uniform_motor_encoder));
 
     stepper_motor_curve_encoder_config_t decel_encoder_config = {
@@ -171,7 +187,7 @@ void app_main(void)
         .start_freq_hz = 1500,
         .end_freq_hz = 500,
     };
-    rmt_encoder_handle_t decel_motor_encoder = NULL;
+    //rmt_encoder_handle_t decel_motor_encoder = NULL;
     ESP_ERROR_CHECK(rmt_new_stepper_motor_curve_encoder(&decel_encoder_config, &decel_motor_encoder));
 
     ESP_LOGI(TAG, "Enable RMT channel");
@@ -204,12 +220,17 @@ void app_main(void)
 
     // Store the handles globally
 
-motor_chan = motor_chan;
-    accel_motor_encoder = accel_motor_encoder;
-    uniform_motor_encoder = uniform_motor_encoder;
-    decel_motor_encoder = decel_motor_encoder;
-    tx_config = tx_config;
-    adc_chars = adc_chars;
+//motor_chan = motor_chan;
+//    accel_motor_encoder = accel_motor_encoder;
+//    uniform_motor_encoder = uniform_motor_encoder;
+ //   decel_motor_encoder = decel_motor_encoder;
+//    tx_config = tx_config;
+//    adc_chars = adc_chars;
+motor_chan = NULL;
+accel_motor_encoder = NULL;
+uniform_motor_encoder = NULL;
+decel_motor_encoder = NULL;
+tx_config.loop_count = 0;
 
     // Create the task
     xTaskCreate(stepper_task, "stepper_task", 4096, NULL, 5, NULL);
