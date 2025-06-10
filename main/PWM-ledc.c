@@ -16,13 +16,46 @@
 #define DEAD_TIME_US           2   // 2us dead time (adjust as needed)
 #define ADC_READ_DELAY_MS 10 // Delay for ADC reading in milliseconds
 
+static const char *TAG = "halfbridge_pwm";
 //extern volatile int g_pwm_adc_value ; // Global variable for ADC value but replaced with queue
-extern QueueHandle_t pwm_adc_queue;
+QueueHandle_t pwm_adc_queue;
+//pwm_adc_queue = xQueueCreate(4, sizeof(int));
 
 adc_oneshot_unit_handle_t adc_handle; // Add this global
+esp_adc_cal_characteristics_t adc_chars;
+
+
 
 void halfbridge_pwm_task(void *pvParameters)
 {
+
+ //pwm_adc_queue = xQueueCreate(4, sizeof(int));
+ // pwm_adc_queue = xQueueCreate(1, sizeof(int));  
+    
+  // --- ADC ONESHOT INIT ---
+    ESP_LOGI(TAG, "Initialize ADC1 channel 6 (GPIO34) with new API");
+    adc_oneshot_unit_init_cfg_t init_config = {
+        .unit_id = ADC_UNIT_1,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle));
+
+    adc_oneshot_chan_cfg_t chan_cfg = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, ADC_CHANNEL_6, &chan_cfg));
+
+    // --- ADC CALIBRATION ---
+    ESP_LOGI(TAG, "ADC calibration");
+    esp_adc_cal_characteristics_t adc_chars_local;
+    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars_local);
+    adc_chars = adc_chars_local; // copy to global for use in task
+
+
+
+
+
+
     // Configure LEDC timer
     ledc_timer_config_t ledc_timer = {
         .speed_mode       = LEDC_HIGH_SPEED_MODE,
@@ -107,7 +140,7 @@ void halfbridge_pwm_task(void *pvParameters)
         esp_rom_delay_us(ADC_READ_DELAY_MS);
          ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &adc_reading));
         //update the queue with the ADC reading
-        //xQueueOverwrite(pwm_adc_queue, &adc_reading); // Overwrite with latest value
+        xQueueOverwrite(pwm_adc_queue, &adc_reading); // Overwrite with latest value
          
         esp_rom_delay_us((1000000 * low_on_percent / 100 / PWM_FREQ_HZ) - DEAD_TIME_US - ADC_READ_DELAY_MS);
 

@@ -16,7 +16,7 @@
 //#include "/adc_cali.h"
 //#include "/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
-#include "esp_adc_cal.h"
+//#include "esp_adc_cal.h"
 
 ///////////////////////////////Change the following configurations according to your board//////////////////////////////
 #define STEP_MOTOR_GPIO_EN       0
@@ -29,17 +29,17 @@
 
 #define STEP_MOTOR_RESOLUTION_HZ 1000000 // 1MHz resolution
 
-static const char *TAG = "example";
+static const char *TAG = "main";
 
 #include "freertos/queue.h"
-QueueHandle_t pwm_adc_queue;
+extern QueueHandle_t pwm_adc_queue;
 
 static rmt_channel_handle_t motor_chan;
 static rmt_encoder_handle_t accel_motor_encoder;
 static rmt_encoder_handle_t uniform_motor_encoder;
 static rmt_encoder_handle_t decel_motor_encoder;
 //static rmt_transmit_config_t tx_config;
-static esp_adc_cal_characteristics_t adc_chars;
+extern esp_adc_cal_characteristics_t adc_chars;
 const static uint32_t accel_samples = 500;
 const static uint32_t decel_samples = 500;
 
@@ -133,7 +133,7 @@ stepper_motor_curve_encoder_config_t decel_cfg = {
     bool rmt_enabled = true; // Assume enabled at startup (since enabled in app_main)
 
      while (1) {
-       // xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
+        xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
        // uint32_t voltage = esp_adc_cal_raw_to_voltage(pwm_adc_value, &adc_chars);
      //   ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", pwm_adc_value, voltage);
 
@@ -201,29 +201,7 @@ stepper_motor_curve_encoder_config_t decel_cfg = {
 void app_main(void)
 {
     
-   // pwm_adc_queue = xQueueCreate(4, sizeof(int));
-    
-    
-  // --- ADC ONESHOT INIT ---
-    ESP_LOGI(TAG, "Initialize ADC1 channel 6 (GPIO34) with new API");
-    adc_oneshot_unit_init_cfg_t init_config = {
-        .unit_id = ADC_UNIT_1,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle));
-
-    adc_oneshot_chan_cfg_t chan_cfg = {
-        .atten = ADC_ATTEN_DB_12,
-        .bitwidth = ADC_BITWIDTH_12,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, ADC_CHANNEL_6, &chan_cfg));
-
-    // --- ADC CALIBRATION ---
-    ESP_LOGI(TAG, "ADC calibration");
-    esp_adc_cal_characteristics_t adc_chars_local;
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars_local);
-    adc_chars = adc_chars_local; // copy to global for use in task
-
-
+   pwm_adc_queue = xQueueCreate(1, sizeof(int));
     // Create the task
     xTaskCreate(stepper_task, "stepper_task", 4096, NULL, 5, NULL);
     ESP_LOGI(TAG, "Stepper motor example started");
