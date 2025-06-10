@@ -17,9 +17,9 @@
 #define ADC_READ_DELAY_MS 10 // Delay for ADC reading in milliseconds
 
 static const char *TAG = "halfbridge_pwm";
-//extern volatile int g_pwm_adc_value ; // Global variable for ADC value but replaced with queue
+// Global queue to hold ADC readings
 QueueHandle_t pwm_adc_queue;
-//pwm_adc_queue = xQueueCreate(4, sizeof(int));
+
 
 adc_oneshot_unit_handle_t adc_handle; // Add this global
 esp_adc_cal_characteristics_t adc_chars;
@@ -29,8 +29,7 @@ esp_adc_cal_characteristics_t adc_chars;
 void halfbridge_pwm_task(void *pvParameters)
 {
 
- //pwm_adc_queue = xQueueCreate(4, sizeof(int));
- // pwm_adc_queue = xQueueCreate(1, sizeof(int));  
+ 
     
   // --- ADC ONESHOT INIT ---
     ESP_LOGI(TAG, "Initialize ADC1 channel 6 (GPIO34) with new API");
@@ -50,10 +49,6 @@ void halfbridge_pwm_task(void *pvParameters)
     esp_adc_cal_characteristics_t adc_chars_local;
     esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars_local);
     adc_chars = adc_chars_local; // copy to global for use in task
-
-
-
-
 
 
     // Configure LEDC timer
@@ -106,8 +101,8 @@ void halfbridge_pwm_task(void *pvParameters)
     uint32_t low_on_ticks  = (max_duty * low_on_percent) / 100;
     //uint32_t dead_ticks = (PWM_FREQ_HZ * DEAD_TIME_US) / 1000000 * max_duty / PWM_FREQ_HZ;
 
-   // int pwm_adc_value = 0;
-    int adc_reading = 2048; // Variable to hold ADC reading
+   
+    int adc_reading = 0; // Variable to hold ADC reading
     
     // Main loop for PWM control
      while (1) {
@@ -138,7 +133,11 @@ void halfbridge_pwm_task(void *pvParameters)
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
         // Add a short delay to allow the signal to stabilize (e.g., 10 microseconds)
         esp_rom_delay_us(ADC_READ_DELAY_MS);
-         ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &adc_reading));
+        // Read ADC value
+         esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &adc_reading);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
+        }
         //update the queue with the ADC reading
         xQueueOverwrite(pwm_adc_queue, &adc_reading); // Overwrite with latest value
          
