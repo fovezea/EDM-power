@@ -21,10 +21,11 @@ static const char *TAG = "halfbridge_pwm";
 // Global queue to hold ADC readings
 QueueHandle_t pwm_adc_queue;
 #define ADC_ATTEN           ADC_ATTEN_DB_12
+#define ADC_CHANNEL    ADC_CHANNEL_3 
 
 adc_oneshot_unit_handle_t adc_handle; // ADC handle
 //esp_adc_cal_characteristics_t adc_chars;
-static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
+bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
 
 
 void halfbridge_pwm_task(void *pvParameters)
@@ -43,15 +44,15 @@ void halfbridge_pwm_task(void *pvParameters)
         .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_12,
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, ADC_CHANNEL_6, &chan_cfg));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, ADC_CHANNEL, &chan_cfg));
 
     // --- ADC CALIBRATION ---
-    ESP_LOGI(TAG, "ADC calibration");
+   // ESP_LOGI(TAG, "ADC calibration");
    // esp_adc_cal_characteristics_t adc_chars_local;
     //esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars_local);
     //adc_chars = adc_chars_local; 
-    adc_cali_handle_t adc1_cali_chan6_handle = NULL;
-    bool do_calibration1_chan6 = adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN, &adc1_cali_chan6_handle);
+   // adc_cali_handle_t adc1_cali_chan6_handle = NULL;
+  //  bool do_calibration1_chan6 = adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN, &adc1_cali_chan6_handle);
 
 
 
@@ -107,23 +108,23 @@ void halfbridge_pwm_task(void *pvParameters)
 
    
     int adc_reading = 0; // Variable to hold ADC reading
-    int voltage = 0; // Variable to hold calibrated voltage reading
+    //int voltage = 0; // Variable to hold calibrated voltage reading
     
     // Main loop for PWM control
      while (1) {
 
-        if (do_calibration1_chan6) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, adc_reading, &voltage));
-            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, ADC_CHANNEL_6, voltage);
-            // xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
+       // if (do_calibration1_chan6) {
+        //    ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, adc_reading, &voltage));
+        //    ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, ADC_CHANNEL_6, voltage);
+           // xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
 
        // This is stopping the PWM if ADC reading is above a threshold 
        //but probably is better not to stop it, just reduce the duty cycle or do nothing at all.
-        if (adc_reading > 3500) {
-            ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
-            ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
-            continue;
-        }
+       // if (adc_reading > 3500) {
+       //     ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
+       //     ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
+       //     continue;
+       // }
 
         // HIGH side ON, LOW side OFF
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, high_on_ticks);
@@ -145,7 +146,7 @@ void halfbridge_pwm_task(void *pvParameters)
         // Add a short delay to allow the signal to stabilize (e.g., 10 microseconds)
         esp_rom_delay_us(ADC_READ_DELAY_MS);
         // Read ADC value
-         esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &adc_reading);
+         esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL, &adc_reading);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
         }
@@ -158,15 +159,15 @@ void halfbridge_pwm_task(void *pvParameters)
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1);
         esp_rom_delay_us(DEAD_TIME_US);
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     }
-}
+
 /*---------------------------------------------------------------
         ADC Calibration
 ---------------------------------------------------------------*/
-static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
+bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
 {
     adc_cali_handle_t handle = NULL;
     esp_err_t ret = ESP_FAIL;

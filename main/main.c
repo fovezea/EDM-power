@@ -18,6 +18,10 @@
 //#include "esp_adc/adc_oneshot.h"
 //#include "esp_adc_cal.h"
 
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include "esp_adc/adc_oneshot.h"
+
 ///////////////////////////////Change the following configurations according to your board//////////////////////////////
 #define STEP_MOTOR_GPIO_EN       0
 #define STEP_MOTOR_GPIO_DIR      2
@@ -28,18 +32,27 @@
 #define HYSTERESIS_WIDTH 100 // ADC value dead zone width
 
 #define STEP_MOTOR_RESOLUTION_HZ 1000000 // 1MHz resolution
+adc_cali_handle_t adc1_cali_chan6_handle = NULL; // Global handle for ADC calibration
+bool do_calibration1_chan6 = false; // Global variable to control ADC calibration
 
 static const char *TAG = "main";
 
 #include "freertos/queue.h"
 extern QueueHandle_t pwm_adc_queue;
-
+extern bool do_calibration1_chan6; // Global variable to control ADC calibration
+extern adc_cali_handle_t adc1_cali_chan6_handle; // Global handle for ADC
+extern bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
 static rmt_channel_handle_t motor_chan;
 static rmt_encoder_handle_t accel_motor_encoder;
 static rmt_encoder_handle_t uniform_motor_encoder;
 static rmt_encoder_handle_t decel_motor_encoder;
 //static rmt_transmit_config_t tx_config;
 //extern esp_adc_cal_characteristics_t adc_chars;
+extern adc_oneshot_chan_cfg_t chan_cfg = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+
 const static uint32_t accel_samples = 500;
 const static uint32_t decel_samples = 500;
 
@@ -131,12 +144,17 @@ stepper_motor_curve_encoder_config_t decel_cfg = {
 
     int pwm_adc_value = 0; // Local variable to hold ADC value retrieved from the queue
     bool rmt_enabled = true; // Assume enabled at startup (since enabled in app_main)
+int voltage = 0; // Variable to hold calibrated voltage reading
 
+ bool do_calibration1_chan6 = adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_3, chan_cfg.atten, &adc1_cali_chan6_handle);
      while (1) {
         xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
       //  uint32_t voltage = esp_adc_cal_raw_to_voltage(pwm_adc_value, &adc_chars);
     //    ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", pwm_adc_value, voltage);
-
+    if (do_calibration1_chan6) {
+           // ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, pwm_adc_value, &voltage));
+            ESP_LOGI(TAG, "ADC%d Channel[%d] ADC Reading: %d, Cali Voltage: %d mV", ADC_UNIT_1 + 1, ADC_CHANNEL_3, pwm_adc_value, voltage);
+    }
         // Hysteresis dead zone
         int center = 2048;
         int lower = center - (HYSTERESIS_WIDTH / 2);
@@ -206,5 +224,5 @@ void app_main(void)
     xTaskCreate(stepper_task, "stepper_task", 4096, NULL, 5, NULL);
     ESP_LOGI(TAG, "Stepper motor example started");
     // create pwm task
-     xTaskCreate(halfbridge_pwm_task, "halfbridge_pwm_task", 2048, NULL, 6, NULL);
+     xTaskCreate(halfbridge_pwm_task, "halfbridge_pwm_task", 4096, NULL, 5, NULL);
 }
