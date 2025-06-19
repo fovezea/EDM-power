@@ -11,11 +11,11 @@
 #include "esp_log.h"
 #include "stepper_motor_encoder.h"
 
-#include "driver/adc.h"
-#include "esp_adc_cal.h"
+//#include "driver/adc.h"
+//#include "esp_adc_cal.h"
 //#include "/adc_cali.h"
 //#include "/adc_cali_scheme.h"
-#include "esp_adc/adc_oneshot.h"
+//#include "esp_adc/adc_oneshot.h"
 //#include "esp_adc_cal.h"
 
 ///////////////////////////////Change the following configurations according to your board//////////////////////////////
@@ -39,13 +39,13 @@ static rmt_encoder_handle_t accel_motor_encoder;
 static rmt_encoder_handle_t uniform_motor_encoder;
 static rmt_encoder_handle_t decel_motor_encoder;
 //static rmt_transmit_config_t tx_config;
-extern esp_adc_cal_characteristics_t adc_chars;
+//extern esp_adc_cal_characteristics_t adc_chars;
 const static uint32_t accel_samples = 500;
 const static uint32_t decel_samples = 500;
 
 const static uint32_t uniform_speed_hz = 1500;
 
-extern adc_oneshot_unit_handle_t adc_handle; 
+//extern adc_oneshot_unit_handle_t adc_handle; 
 //volatile int g_pwm_adc_value = 0;
 
 extern void halfbridge_pwm_task(void *pvParameters); // Forward declaration of the PWM task
@@ -134,8 +134,8 @@ stepper_motor_curve_encoder_config_t decel_cfg = {
 
      while (1) {
         xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
-        uint32_t voltage = esp_adc_cal_raw_to_voltage(pwm_adc_value, &adc_chars);
-        ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", pwm_adc_value, voltage);
+      //  uint32_t voltage = esp_adc_cal_raw_to_voltage(pwm_adc_value, &adc_chars);
+    //    ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", pwm_adc_value, voltage);
 
         // Hysteresis dead zone
         int center = 2048;
