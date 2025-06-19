@@ -62,6 +62,7 @@ const static uint32_t uniform_speed_hz = 1500;
 //volatile int g_pwm_adc_value = 0;
 
 extern void halfbridge_pwm_task(void *pvParameters); // Forward declaration of the PWM task
+extern void mcpwm_halfbridge_task(void *pvParameters); // Forward declaration of the MCPWM task
 
 // The task function
 void stepper_task(void *pvParameters)
@@ -224,5 +225,7 @@ void app_main(void)
     xTaskCreate(stepper_task, "stepper_task", 4096, NULL, 5, NULL);
     ESP_LOGI(TAG, "Stepper motor example started");
     // create pwm task
-     xTaskCreate(halfbridge_pwm_task, "halfbridge_pwm_task", 4096, NULL, 5, NULL);
+    // xTaskCreate(halfbridge_pwm_task, "halfbridge_pwm_task", 4096, NULL, 5, NULL);
+
+      xTaskCreate(mcpwm_halfbridge_task, "mcpwm_halfbridge", 4096, NULL, 5, NULL);
 }
