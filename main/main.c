@@ -152,7 +152,7 @@ int voltage = 0; // Variable to hold calibrated voltage reading
       //  uint32_t voltage = esp_adc_cal_raw_to_voltage(pwm_adc_value, &adc_chars);
     //    ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", pwm_adc_value, voltage);
     if (do_calibration1_chan6) {
-           // ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, pwm_adc_value, &voltage));
+            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, pwm_adc_value, &voltage));
             ESP_LOGI(TAG, "ADC%d Channel[%d] ADC Reading: %d, Cali Voltage: %d mV", ADC_UNIT_1 + 1, ADC_CHANNEL_3, pwm_adc_value, voltage);
     }
         // Hysteresis dead zone
