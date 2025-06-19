@@ -10,8 +10,10 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "soc/soc_caps.h"
 // Define your half-bridge pins and dead time (in microseconds)
-#define HALFBRIDGE_HIGH_GPIO   16
-#define HALFBRIDGE_LOW_GPIO    17
+//#define HALFBRIDGE_HIGH_GPIO   16   //originally 16
+//#define HALFBRIDGE_LOW_GPIO    17
+#define HALFBRIDGE_HIGH_GPIO   17
+#define HALFBRIDGE_LOW_GPIO    16
 #define PWM_FREQ_HZ            20000
 #define PWM_RES_BITS           LEDC_TIMER_10_BIT
 #define DEAD_TIME_US           2   // 2us dead time (adjust as needed)
@@ -104,7 +106,7 @@ void halfbridge_pwm_task(void *pvParameters)
     uint32_t max_duty = (1 << PWM_RES_BITS) - 1;
     uint32_t high_on_ticks = (max_duty * high_on_percent) / 100;
     uint32_t low_on_ticks  = (max_duty * low_on_percent) / 100;
-    //uint32_t dead_ticks = (PWM_FREQ_HZ * DEAD_TIME_US) / 1000000 * max_duty / PWM_FREQ_HZ;
+    uint32_t dead_ticks = (PWM_FREQ_HZ * DEAD_TIME_US) / 1000000 * max_duty / PWM_FREQ_HZ;
 
    
     int adc_reading = 0; // Variable to hold ADC reading
@@ -120,10 +122,11 @@ void halfbridge_pwm_task(void *pvParameters)
 
        // This is stopping the PWM if ADC reading is above a threshold 
        //but probably is better not to stop it, just reduce the duty cycle or do nothing at all.
+       //also it is wrong as the ADC is stoped and the value is not updated and the watch dog will trigger.
        // if (adc_reading > 3500) {
        //     ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
        //     ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
-       //     continue;
+       //     continue;//this is not good here.
        // }
 
         // HIGH side ON, LOW side OFF
@@ -144,22 +147,22 @@ void halfbridge_pwm_task(void *pvParameters)
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
         // Add a short delay to allow the signal to stabilize (e.g., 10 microseconds)
-        esp_rom_delay_us(ADC_READ_DELAY_MS);
+        //esp_rom_delay_us(ADC_READ_DELAY_MS);
         // Read ADC value
-         esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL, &adc_reading);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
-        }
+        // esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL, &adc_reading);
+       // if (err != ESP_OK) {
+        //    ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
+        //}
         //update the queue with the ADC reading
-        xQueueOverwrite(pwm_adc_queue, &adc_reading); // Overwrite with latest value
+       // xQueueOverwrite(pwm_adc_queue, &adc_reading); // Overwrite with latest value
          
-        esp_rom_delay_us((1000000 * low_on_percent / 100 / PWM_FREQ_HZ) - DEAD_TIME_US - ADC_READ_DELAY_MS);
-
+       // esp_rom_delay_us((1000000 * low_on_percent / 100 / PWM_FREQ_HZ) - DEAD_TIME_US - ADC_READ_DELAY_MS);
+       esp_rom_delay_us((1000000 * low_on_percent / 100 / PWM_FREQ_HZ) - DEAD_TIME_US);
         // Both OFF for dead time
         ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
         ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1);
         esp_rom_delay_us(DEAD_TIME_US);
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 
     }
