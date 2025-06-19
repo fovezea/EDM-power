@@ -5,9 +5,10 @@
 #include "esp_log.h"
 #include "freertos/queue.h"
 #include "esp_adc/adc_oneshot.h"
-#include "esp_adc_cal.h"
-
-
+//#include "esp_adc_cal.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include "soc/soc_caps.h"
 // Define your half-bridge pins and dead time (in microseconds)
 #define HALFBRIDGE_HIGH_GPIO   16
 #define HALFBRIDGE_LOW_GPIO    17
@@ -19,11 +20,11 @@
 static const char *TAG = "halfbridge_pwm";
 // Global queue to hold ADC readings
 QueueHandle_t pwm_adc_queue;
+#define ADC_ATTEN           ADC_ATTEN_DB_12
 
-
-adc_oneshot_unit_handle_t adc_handle; // Add this global
-esp_adc_cal_characteristics_t adc_chars;
-
+adc_oneshot_unit_handle_t adc_handle; // ADC handle
+//esp_adc_cal_characteristics_t adc_chars;
+static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
 
 
 void halfbridge_pwm_task(void *pvParameters)
@@ -46,9 +47,12 @@ void halfbridge_pwm_task(void *pvParameters)
 
     // --- ADC CALIBRATION ---
     ESP_LOGI(TAG, "ADC calibration");
-    esp_adc_cal_characteristics_t adc_chars_local;
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars_local);
-    adc_chars = adc_chars_local; // copy to global for use in task
+   // esp_adc_cal_characteristics_t adc_chars_local;
+    //esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars_local);
+    //adc_chars = adc_chars_local; 
+    adc_cali_handle_t adc1_cali_chan6_handle = NULL;
+    bool do_calibration1_chan6 = adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_6, ADC_ATTEN, &adc1_cali_chan6_handle);
+
 
 
     // Configure LEDC timer
@@ -103,11 +107,18 @@ void halfbridge_pwm_task(void *pvParameters)
 
    
     int adc_reading = 0; // Variable to hold ADC reading
+    int voltage = 0; // Variable to hold calibrated voltage reading
     
     // Main loop for PWM control
      while (1) {
-       // xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
 
+        if (do_calibration1_chan6) {
+            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, adc_reading, &voltage));
+            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, ADC_CHANNEL_6, voltage);
+            // xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
+
+       // This is stopping the PWM if ADC reading is above a threshold 
+       //but probably is better not to stop it, just reduce the duty cycle or do nothing at all.
         if (adc_reading > 3500) {
             ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, 0);
             ledc_stop(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_1, 0);
@@ -151,5 +162,67 @@ void halfbridge_pwm_task(void *pvParameters)
     }
 
     }
+}
+/*---------------------------------------------------------------
+        ADC Calibration
+---------------------------------------------------------------*/
+static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
+{
+    adc_cali_handle_t handle = NULL;
+    esp_err_t ret = ESP_FAIL;
+    bool calibrated = false;
 
-   
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    if (!calibrated) {
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
+        adc_cali_curve_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .chan = channel,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    if (!calibrated) {
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
+        adc_cali_line_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+    *out_handle = handle;
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Calibration Success");
+    } else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated) {
+        ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
+    } else {
+        ESP_LOGE(TAG, "Invalid arg or no memory");
+    }
+
+    return calibrated;
+}
+
+  static void adc_calibration_deinit(adc_cali_handle_t handle)
+{
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    ESP_LOGI(TAG, "deregister %s calibration scheme", "Curve Fitting");
+    ESP_ERROR_CHECK(adc_cali_delete_scheme_curve_fitting(handle));
+
+#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    ESP_LOGI(TAG, "deregister %s calibration scheme", "Line Fitting");
+    ESP_ERROR_CHECK(adc_cali_delete_scheme_line_fitting(handle));
+#endif
+} 
