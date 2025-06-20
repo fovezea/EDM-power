@@ -10,6 +10,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "stepper_motor_encoder.h"
+#include "freertos/semphr.h"
 
 //#include "driver/adc.h"
 //#include "esp_adc_cal.h"
@@ -40,6 +41,10 @@ static const char *TAG = "main";
 #include "freertos/queue.h"
 extern QueueHandle_t pwm_adc_queue;
 extern bool do_calibration1_chan6; // Global variable to control ADC calibration
+
+extern volatile uint32_t last_capture_ticks;
+extern SemaphoreHandle_t capture_semaphore;
+
 extern adc_cali_handle_t adc1_cali_chan6_handle; // Global handle for ADC
 extern bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
 static rmt_channel_handle_t motor_chan;
@@ -212,20 +217,44 @@ int voltage = 0; // Variable to hold calibrated voltage reading
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
         }
 
+        // Example: Wait for a new capture event and read the value
+        if (capture_semaphore && xSemaphoreTake(capture_semaphore, pdMS_TO_TICKS(10)) == pdTRUE) {
+            ESP_LOGI(TAG, "Last capture ticks: %u", last_capture_ticks);
+            // You can use last_capture_ticks here
+        }
+
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
 }
 
+extern adc_oneshot_unit_handle_t adc_handle;
+volatile int adc_value_on_capture = 0;
+
+void adc_on_capture_task(void *pvParameters)
+{
+    while (1) {
+        if (capture_semaphore && xSemaphoreTake(capture_semaphore, portMAX_DELAY) == pdTRUE) {
+            int value = 0;
+            esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &value);
+            if (err == ESP_OK) {
+                adc_value_on_capture = value;
+                ESP_LOGI(TAG, "ADC value at capture: %d", adc_value_on_capture);
+            } else {
+                ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
+            }
+        }
+    }
+}
+
 void app_main(void)
 {
-    
-   pwm_adc_queue = xQueueCreate(1, sizeof(int));
+    pwm_adc_queue = xQueueCreate(1, sizeof(int));
     // Create the task
     xTaskCreate(stepper_task, "stepper_task", 4096, NULL, 5, NULL);
     ESP_LOGI(TAG, "Stepper motor example started");
     // create pwm task
     // xTaskCreate(halfbridge_pwm_task, "halfbridge_pwm_task", 4096, NULL, 5, NULL);
-
-      xTaskCreate(mcpwm_halfbridge_task, "mcpwm_halfbridge", 4096, NULL, 5, NULL);
+    xTaskCreate(mcpwm_halfbridge_task, "mcpwm_halfbridge", 4096, NULL, 5, NULL);
+    xTaskCreate(adc_on_capture_task, "adc_on_capture_task", 2048, NULL, 10, NULL); // High priority for fast ADC
 }
