@@ -1,7 +1,7 @@
 
 
 # RMT Based Stepper Motor Smooth Controller
-# LEDc based pwm controller for EDM power supply
+# MCPWM based pwm controller for EDM power supply
 
 
 One RMT TX channel can use different encoders in sequence, which is useful to generate waveforms that have obvious multiple stages.
