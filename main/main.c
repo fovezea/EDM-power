@@ -149,81 +149,54 @@ stepper_motor_curve_encoder_config_t decel_cfg = {
 */ 
 
     int pwm_adc_value = 0; // Local variable to hold ADC value retrieved from the queue
-    bool rmt_enabled = true; // Assume enabled at startup (since enabled in app_main)
-int voltage = 0; // Variable to hold calibrated voltage reading
+    bool rmt_enabled = true;
+    int voltage = 0;
+    extern volatile uint32_t last_capture_ticks;
+    extern volatile int adc_value_on_capture;
+    const uint32_t SHORT_DELAY_TICKS = 100; // adjust based on your timing
+    const int LOW_VOLTAGE = 500;            // adjust based on your ADC scaling
+    const uint32_t LONG_DELAY_TICKS = 500;  // adjust based on your timing
+    const int HIGH_VOLTAGE = 2000;          // adjust based on your ADC scaling
+    int step_direction = 0; // -1: retract, 0: hold, 1: advance
 
- bool do_calibration1_chan6 = adc_calibration_init(ADC_UNIT_1, ADC_CHANNEL_3, chan_cfg.atten, &adc1_cali_chan6_handle);
-     while (1) {
-        xQueueReceive(pwm_adc_queue, &pwm_adc_value, pdMS_TO_TICKS(10));
-      //  uint32_t voltage = esp_adc_cal_raw_to_voltage(pwm_adc_value, &adc_chars);
-    //    ESP_LOGI(TAG, "ADC Reading: %d, Voltage: %lu mV", pwm_adc_value, voltage);
-    if (do_calibration1_chan6) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan6_handle, pwm_adc_value, &voltage));
-            ESP_LOGI(TAG, "ADC%d Channel[%d] ADC Reading: %d, Cali Voltage: %d mV", ADC_UNIT_1 + 1, ADC_CHANNEL_3, pwm_adc_value, voltage);
-    }
-        // Hysteresis dead zone
-        int center = 2048;
-        int lower = center - (HYSTERESIS_WIDTH / 2);
-        int upper = center + (HYSTERESIS_WIDTH / 2);
-
-        if (pwm_adc_value > lower && pwm_adc_value < upper) {
-            // In dead zone: disable motor
-            gpio_set_level(STEP_MOTOR_GPIO_EN, !STEP_MOTOR_ENABLE_LEVEL); // disable
-            ESP_LOGI(TAG, "In dead zone: Motor stopped");
-            // Disable RMT channel to stop sending pulses, only if enabled
-            if (rmt_enabled) {
-                ESP_ERROR_CHECK(rmt_disable(motor_chan));
-                rmt_enabled = false;
-                ESP_LOGI(TAG, "In dead zone: Motor stopped (RMT disabled)");
-            }
-        } else {
-            // Outside dead zone: enable motor and set speed, only if disabled
-            if (!rmt_enabled) {
-                ESP_ERROR_CHECK(rmt_enable(motor_chan));
-                rmt_enabled = true;
-                ESP_LOGI(TAG, "Outside dead zone: Motor enabled (RMT enabled)");
-            }
-            // ...existing code for speed/direction/transmit...
-            uint32_t speed_hz = (pwm_adc_value * 1500) / 4095;
-            if (speed_hz < 100) speed_hz = 100;
-
-            if (pwm_adc_value < lower) {
-                gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
-                ESP_LOGI(TAG, "Direction: Counter-clockwise");
-            } else {
-                gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
-                ESP_LOGI(TAG, "Direction: Clockwise");
-            }
-            ESP_LOGI(TAG, "Mapped Speed: %lu Hz", speed_hz);
-
-            gpio_set_level(STEP_MOTOR_GPIO_EN, STEP_MOTOR_ENABLE_LEVEL);
-
-            ESP_LOGI(TAG, "Transmitting motor commands in three phases: acceleration, uniform speed, and deceleration");
-
-           // tx_config.loop_count = 0;
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &accel_samples, sizeof(accel_samples), &tx_config));
-            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, NULL, 0, &tx_config));
-           // ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &accel_cfg, sizeof(accel_cfg), &tx_config));
-            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &accel_samples, sizeof(accel_samples), &tx_config));
-
-            // Do not set loop_count to 5000; always keep it 0 for stepper encoders
-            //tx_config.loop_count = 5000;  
-           // tx_config.loop_count = 0;
-
-            //ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &accel_encoder_config, sizeof(accel_encoder_config), &tx_config));
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &uniform_speed_hz, sizeof(uniform_speed_hz), &tx_config));
-           // tx_config.loop_count = 0;
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &decel_samples, sizeof(decel_samples), &tx_config));
-            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
-        }
-
-        // Example: Wait for a new capture event and read the value
+    while (1) {
+        // Wait for a new capture event and ADC sample
         if (capture_semaphore && xSemaphoreTake(capture_semaphore, pdMS_TO_TICKS(10)) == pdTRUE) {
-            ESP_LOGI(TAG, "Last capture ticks: %u", last_capture_ticks);
-            // You can use last_capture_ticks here
-        }
+            uint32_t delay_ticks = last_capture_ticks;
+            int gap_voltage = adc_value_on_capture;
+            ESP_LOGI(TAG, "EDM: delay_ticks=%lu, gap_voltage=%d", delay_ticks, gap_voltage);
 
-        vTaskDelay(pdMS_TO_TICKS(1000));
+            // Control logic
+            if (delay_ticks < SHORT_DELAY_TICKS && gap_voltage < LOW_VOLTAGE) {
+                // Too close: retract electrode
+                step_direction = -1;
+                ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
+            } else if (delay_ticks > LONG_DELAY_TICKS && gap_voltage > HIGH_VOLTAGE) {
+                // Too far: advance electrode
+                step_direction = 1;
+                ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
+            } else {
+                // Hold position
+                step_direction = 0;
+                ESP_LOGI(TAG, "EDM: Gap OK, holding position");
+            }
+
+            // Move stepper based on step_direction
+            if (step_direction == -1) {
+                gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
+                // Send a small number of steps to retract
+                uint32_t steps = 5;
+                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
+                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            } else if (step_direction == 1) {
+                gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
+                // Send a small number of steps to advance
+                uint32_t steps = 5;
+                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
+                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            } // else hold (do nothing)
+        }
+        vTaskDelay(pdMS_TO_TICKS(2)); // Fast loop, but not too fast
     }
 
 }
@@ -233,13 +206,29 @@ volatile int adc_value_on_capture = 0;
 
 void adc_on_capture_task(void *pvParameters)
 {
+    const int FILTER_WINDOW = 8; // Number of samples for moving average
+    int adc_buffer[FILTER_WINDOW] = {0};
+    int buffer_index = 0;
+    int last_valid = 0;
+    const int MAX_JUMP = 200; // Max allowed jump between samples
     while (1) {
         if (capture_semaphore && xSemaphoreTake(capture_semaphore, portMAX_DELAY) == pdTRUE) {
             int value = 0;
             esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &value);
             if (err == ESP_OK) {
-                adc_value_on_capture = value;
-                ESP_LOGI(TAG, "ADC value at capture: %d", adc_value_on_capture);
+                // Simple outlier filter: if value is too far from last valid, ignore
+                if (buffer_index > 0 && abs(value - last_valid) > MAX_JUMP) {
+                    value = last_valid; // Clamp to last valid
+                }
+                adc_buffer[buffer_index] = value;
+                buffer_index = (buffer_index + 1) % FILTER_WINDOW;
+                // Compute moving average
+                int sum = 0;
+                for (int i = 0; i < FILTER_WINDOW; ++i) sum += adc_buffer[i];
+                int avg = sum / FILTER_WINDOW;
+                adc_value_on_capture = avg;
+                last_valid = value;
+                ESP_LOGI(TAG, "ADC value (filtered avg): %d", adc_value_on_capture);
             } else {
                 ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
             }
