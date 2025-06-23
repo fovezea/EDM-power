@@ -58,10 +58,10 @@ extern adc_oneshot_chan_cfg_t chan_cfg = {
         .bitwidth = ADC_BITWIDTH_12,
     };
 
-const static uint32_t accel_samples = 500;
-const static uint32_t decel_samples = 500;
+//const static uint32_t accel_samples = 500;
+//const static uint32_t decel_samples = 500;
 
-const static uint32_t uniform_speed_hz = 1500;
+//const static uint32_t uniform_speed_hz = 1500;
 
 //extern adc_oneshot_unit_handle_t adc_handle; 
 //volatile int g_pwm_adc_value = 0;
@@ -148,9 +148,9 @@ stepper_motor_curve_encoder_config_t decel_cfg = {
 };
 */ 
 
-    int pwm_adc_value = 0; // Local variable to hold ADC value retrieved from the queue
-    bool rmt_enabled = true;
-    int voltage = 0;
+  //  int pwm_adc_value = 0; // Local variable to hold ADC value retrieved from the queue
+  //  bool rmt_enabled = true;
+  //  int voltage = 0;
     extern volatile uint32_t last_capture_ticks;
     extern volatile int adc_value_on_capture;
     const uint32_t SHORT_DELAY_TICKS = 100; // adjust based on your timing
@@ -204,9 +204,9 @@ stepper_motor_curve_encoder_config_t decel_cfg = {
 extern adc_oneshot_unit_handle_t adc_handle;
 volatile int adc_value_on_capture = 0;
 
+#define FILTER_WINDOW 8 // Number of samples for moving average
 void adc_on_capture_task(void *pvParameters)
 {
-    const int FILTER_WINDOW = 8; // Number of samples for moving average
     int adc_buffer[FILTER_WINDOW] = {0};
     int buffer_index = 0;
     int last_valid = 0;
