@@ -8,22 +8,28 @@
 #define MCPWM_GPIO_PWM0B   17
 #define MCPWM_CAP_GPIO   18  // External signal capture pin
 #define PWM_FREQ_HZ        20000
-#define DEAD_TIME_NS       10000
+#define DEAD_TIME_NS       100
 
 volatile int duty_percent = 40; // Start with 40%, change this variable from elsewhere
 volatile uint32_t last_capture_ticks = 0;
 SemaphoreHandle_t capture_semaphore = NULL;
 
-static void IRAM_ATTR capture_cb(mcpwm_cap_channel_handle_t cap_chan, const mcpwm_capture_event_data_t *edata, void *user_data)
+static bool IRAM_ATTR capture_cb(mcpwm_cap_channel_handle_t cap_chan, const mcpwm_capture_event_data_t *edata, void *user_data)
 {
     last_capture_ticks = edata->cap_value;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    if (capture_semaphore) {
-        xSemaphoreGiveFromISR(capture_semaphore, &xHigherPriorityTaskWoken);
+    static uint32_t capture_counter = 0;
+    capture_counter++;
+    if (capture_counter >= 100) { // Trigger every 100th event (adjust as needed)
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        if (capture_semaphore) {
+            xSemaphoreGiveFromISR(capture_semaphore, &xHigherPriorityTaskWoken);
+        }
+        if (xHigherPriorityTaskWoken) {
+            portYIELD_FROM_ISR();
+        }
+        capture_counter = 0;
     }
-    if (xHigherPriorityTaskWoken) {
-        portYIELD_FROM_ISR();
-    }
+    return false;
 }
 
 void setup_mcpwm_capture(mcpwm_timer_handle_t timer)
