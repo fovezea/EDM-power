@@ -37,7 +37,6 @@ void setup_mcpwm_capture(mcpwm_timer_handle_t timer)
     mcpwm_cap_timer_handle_t cap_timer = NULL;
     mcpwm_capture_timer_config_t cap_timer_config = {
         .group_id = 0,
-        .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
         .resolution_hz = 10000000, // 0.1us per tick
     };
     ESP_ERROR_CHECK(mcpwm_new_capture_timer(&cap_timer_config, &cap_timer));

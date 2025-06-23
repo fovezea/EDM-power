@@ -124,33 +124,14 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
     ESP_ERROR_CHECK(rmt_new_stepper_motor_curve_encoder(&decel_encoder_config, &decel_motor_encoder));
 
     ESP_LOGI(TAG, "Enable RMT channel");
-    ESP_ERROR_CHECK(rmt_enable(motor_chan));
-
-    ESP_LOGI(TAG, "Spin motor for 6000 steps: 500 accel + 5000 uniform + 500 decel");
-    rmt_transmit_config_t tx_config = {
-        .loop_count = 0,
-    };
-
-
-
-    /////////////////////////
-/*tepper_motor_curve_encoder_config_t accel_cfg = {
-    .resolution = STEP_MOTOR_RESOLUTION_HZ,
-    .sample_points = 500,
-    .start_freq_hz = 500,
-    .end_freq_hz = 1500,
-};
-stepper_motor_curve_encoder_config_t decel_cfg = {
-    .resolution = STEP_MOTOR_RESOLUTION_HZ,
-    .sample_points = 500,
-    .start_freq_hz = 1500,
-    .end_freq_hz = 500,
-};
-*/ 
-
-  //  int pwm_adc_value = 0; // Local variable to hold ADC value retrieved from the queue
-  //  bool rmt_enabled = true;
-  //  int voltage = 0;
+    // Debug: print motor_chan handle before enabling
+    ESP_LOGI(TAG, "motor_chan handle: %p", motor_chan);
+    esp_err_t err = rmt_enable(motor_chan);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable RMT channel: %s", esp_err_to_name(err));
+        return;
+    }
+    // Variable declarations moved to function scope
     extern volatile uint32_t last_capture_ticks;
     extern volatile int adc_value_on_capture;
     const uint32_t SHORT_DELAY_TICKS = 100; // adjust based on your timing
@@ -159,44 +140,41 @@ stepper_motor_curve_encoder_config_t decel_cfg = {
     const int HIGH_VOLTAGE = 2000;          // adjust based on your ADC scaling
     int step_direction = 0; // -1: retract, 0: hold, 1: advance
 
+    ESP_LOGI(TAG, "RMT channel enabled, entering main loop");
     while (1) {
-        // Wait for a new capture event and ADC sample
-        if (capture_semaphore && xSemaphoreTake(capture_semaphore, pdMS_TO_TICKS(10)) == pdTRUE) {
+        // Non-blocking: check for new capture event and ADC sample
+        if (capture_semaphore && xSemaphoreTake(capture_semaphore, 0) == pdTRUE) {
             uint32_t delay_ticks = last_capture_ticks;
             int gap_voltage = adc_value_on_capture;
             ESP_LOGI(TAG, "EDM: delay_ticks=%lu, gap_voltage=%d", delay_ticks, gap_voltage);
 
             // Control logic
             if (delay_ticks < SHORT_DELAY_TICKS && gap_voltage < LOW_VOLTAGE) {
-                // Too close: retract electrode
                 step_direction = -1;
                 ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
             } else if (delay_ticks > LONG_DELAY_TICKS && gap_voltage > HIGH_VOLTAGE) {
-                // Too far: advance electrode
                 step_direction = 1;
                 ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
             } else {
-                // Hold position
                 step_direction = 0;
                 ESP_LOGI(TAG, "EDM: Gap OK, holding position");
             }
-
+            /*
             // Move stepper based on step_direction
             if (step_direction == -1) {
                 gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
-                // Send a small number of steps to retract
                 uint32_t steps = 5;
                 ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
                 ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             } else if (step_direction == 1) {
                 gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
-                // Send a small number of steps to advance
                 uint32_t steps = 5;
                 ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
                 ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             } // else hold (do nothing)
+            */
         }
-        vTaskDelay(pdMS_TO_TICKS(2)); // Fast loop, but not too fast
+        vTaskDelay(pdMS_TO_TICKS(20)); // Always yield to avoid WDT
     }
 
 }
