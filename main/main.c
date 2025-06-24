@@ -12,13 +12,6 @@
 #include "stepper_motor_encoder.h"
 #include "freertos/semphr.h"
 
-//#include "driver/adc.h"
-//#include "esp_adc_cal.h"
-//#include "/adc_cali.h"
-//#include "/adc_cali_scheme.h"
-//#include "esp_adc/adc_oneshot.h"
-//#include "esp_adc_cal.h"
-
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
@@ -33,41 +26,25 @@
 #define HYSTERESIS_WIDTH 100 // ADC value dead zone width
 
 #define STEP_MOTOR_RESOLUTION_HZ 1000000 // 1MHz resolution
-adc_cali_handle_t adc1_cali_chan6_handle = NULL; // Global handle for ADC calibration
-bool do_calibration1_chan6 = false; // Global variable to control ADC calibration
 
 static const char *TAG = "main";
 
 #include "freertos/queue.h"
-extern QueueHandle_t pwm_adc_queue;
-extern bool do_calibration1_chan6; // Global variable to control ADC calibration
+QueueHandle_t pwm_adc_queue = NULL;
 
+// Only extern variables that are defined in other files and actually used in main.c
 extern volatile uint32_t last_capture_ticks;
-extern SemaphoreHandle_t capture_semaphore;
+extern volatile int adc_value_on_capture;
+// capture_semaphore and adc_calibration_init are not used in main.c, so removed
 
-extern adc_cali_handle_t adc1_cali_chan6_handle; // Global handle for ADC
-extern bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
+// Extern declaration for adc_on_capture_task (defined in ADC.c)
+extern void adc_on_capture_task(void *pvParameters);
+
+// Local static/global variables (defined in this file and actually used)
 static rmt_channel_handle_t motor_chan;
 static rmt_encoder_handle_t accel_motor_encoder;
 static rmt_encoder_handle_t uniform_motor_encoder;
 static rmt_encoder_handle_t decel_motor_encoder;
-//static rmt_transmit_config_t tx_config;
-//extern esp_adc_cal_characteristics_t adc_chars;
-extern adc_oneshot_chan_cfg_t chan_cfg = {
-        .atten = ADC_ATTEN_DB_12,
-        .bitwidth = ADC_BITWIDTH_12,
-    };
-
-//const static uint32_t accel_samples = 500;
-//const static uint32_t decel_samples = 500;
-
-//const static uint32_t uniform_speed_hz = 1500;
-
-//extern adc_oneshot_unit_handle_t adc_handle; 
-//volatile int g_pwm_adc_value = 0;
-
-extern void halfbridge_pwm_task(void *pvParameters); // Forward declaration of the PWM task
-extern void mcpwm_halfbridge_task(void *pvParameters); // Forward declaration of the MCPWM task
 
 // The task function
 void stepper_task(void *pvParameters)
@@ -142,77 +119,42 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
 
     ESP_LOGI(TAG, "RMT channel enabled, entering main loop");
     while (1) {
-        // Non-blocking: check for new capture event and ADC sample
-        if (capture_semaphore && xSemaphoreTake(capture_semaphore, 0) == pdTRUE) {
-            uint32_t delay_ticks = last_capture_ticks;
-            int gap_voltage = adc_value_on_capture;
-            ESP_LOGI(TAG, "EDM: delay_ticks=%lu, gap_voltage=%d", delay_ticks, gap_voltage);
+        // Use the latest values directly, no need to take the semaphore here
+        uint32_t delay_ticks = last_capture_ticks;
+        int gap_voltage = adc_value_on_capture;
+        ESP_LOGI(TAG, "EDM: delay_ticks=%lu, gap_voltage=%d", delay_ticks, gap_voltage);
 
-            // Control logic
-            if (delay_ticks < SHORT_DELAY_TICKS && gap_voltage < LOW_VOLTAGE) {
-                step_direction = -1;
-                ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
-            } else if (delay_ticks > LONG_DELAY_TICKS && gap_voltage > HIGH_VOLTAGE) {
-                step_direction = 1;
-                ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
-            } else {
-                step_direction = 0;
-                ESP_LOGI(TAG, "EDM: Gap OK, holding position");
-            }
-            /*
-            // Move stepper based on step_direction
-            if (step_direction == -1) {
-                gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
-                uint32_t steps = 5;
-                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
-                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
-            } else if (step_direction == 1) {
-                gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
-                uint32_t steps = 5;
-                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
-                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
-            } // else hold (do nothing)
-            */
+        // Control logic
+        if (delay_ticks < SHORT_DELAY_TICKS && gap_voltage < LOW_VOLTAGE) {
+            step_direction = -1;
+            ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
+        } else if (delay_ticks > LONG_DELAY_TICKS && gap_voltage > HIGH_VOLTAGE) {
+            step_direction = 1;
+            ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
+        } else {
+            step_direction = 0;
+            ESP_LOGI(TAG, "EDM: Gap OK, holding position");
         }
+        
+        // Move stepper based on step_direction
+        if (step_direction == -1) {
+            gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
+            uint32_t steps = 5;
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
+            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+        } else if (step_direction == 1) {
+            gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
+            uint32_t steps = 5;
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
+            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+        } // else hold (do nothing)
+        
         vTaskDelay(pdMS_TO_TICKS(20)); // Always yield to avoid WDT
     }
 
 }
 
-extern adc_oneshot_unit_handle_t adc_handle;
-volatile int adc_value_on_capture = 0;
 
-#define FILTER_WINDOW 8 // Number of samples for moving average
-void adc_on_capture_task(void *pvParameters)
-{
-    int adc_buffer[FILTER_WINDOW] = {0};
-    int buffer_index = 0;
-    int last_valid = 0;
-    const int MAX_JUMP = 200; // Max allowed jump between samples
-    while (1) {
-        if (capture_semaphore && xSemaphoreTake(capture_semaphore, portMAX_DELAY) == pdTRUE) {
-            int value = 0;
-            esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &value);
-            if (err == ESP_OK) {
-                // Simple outlier filter: if value is too far from last valid, ignore
-                if (buffer_index > 0 && abs(value - last_valid) > MAX_JUMP) {
-                    value = last_valid; // Clamp to last valid
-                }
-                adc_buffer[buffer_index] = value;
-                buffer_index = (buffer_index + 1) % FILTER_WINDOW;
-                // Compute moving average
-                int sum = 0;
-                for (int i = 0; i < FILTER_WINDOW; ++i) sum += adc_buffer[i];
-                int avg = sum / FILTER_WINDOW;
-                adc_value_on_capture = avg;
-                last_valid = value;
-                ESP_LOGI(TAG, "ADC value (filtered avg): %d", adc_value_on_capture);
-            } else {
-                ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
-            }
-        }
-    }
-}
 
 void app_main(void)
 {
@@ -220,8 +162,6 @@ void app_main(void)
     // Create the task
     xTaskCreate(stepper_task, "stepper_task", 4096, NULL, 5, NULL);
     ESP_LOGI(TAG, "Stepper motor example started");
-    // create pwm task
-    // xTaskCreate(halfbridge_pwm_task, "halfbridge_pwm_task", 4096, NULL, 5, NULL);
-    xTaskCreate(mcpwm_halfbridge_task, "mcpwm_halfbridge", 4096, NULL, 5, NULL);
+
     xTaskCreate(adc_on_capture_task, "adc_on_capture_task", 2048, NULL, 10, NULL); // High priority for fast ADC
 }
