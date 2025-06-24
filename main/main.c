@@ -24,6 +24,11 @@
 #define STEP_MOTOR_SPIN_DIR_CLOCKWISE 0
 #define STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE !STEP_MOTOR_SPIN_DIR_CLOCKWISE
 #define HYSTERESIS_WIDTH 100 // ADC value dead zone width
+//buttons for jogging
+#define JOG_UP_GPIO   12  // Choose your GPIO numbers
+#define JOG_DOWN_GPIO 13
+#define LIMIT_SWITCH_GPIO 14
+#define START_CUT_GPIO    15
 
 #define STEP_MOTOR_RESOLUTION_HZ 1000000 // 1MHz resolution
 
@@ -58,6 +63,17 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
         .pin_bit_mask = 1ULL << STEP_MOTOR_GPIO_DIR | 1ULL << STEP_MOTOR_GPIO_EN,
     };
     ESP_ERROR_CHECK(gpio_config(&en_dir_gpio_config));
+
+
+    //ESP_LOGI(TAG, "Initialize  GPIO");
+        gpio_config_t jog_gpio_config = {
+        .mode = GPIO_MODE_INPUT,
+        .intr_type = GPIO_INTR_DISABLE,
+        .pin_bit_mask = (1ULL << JOG_UP_GPIO) | (1ULL << JOG_DOWN_GPIO) | (1ULL << LIMIT_SWITCH_GPIO) | (1ULL << START_CUT_GPIO),
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&jog_gpio_config));
 
     ESP_LOGI(TAG, "Create RMT TX channel");
     //rmt_channel_handle_t motor_chan = NULL;
@@ -115,41 +131,81 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
     const int LOW_VOLTAGE = 500;            // adjust based on your ADC scaling
     const uint32_t LONG_DELAY_TICKS = 500;  // adjust based on your timing
     const int HIGH_VOLTAGE = 2000;          // adjust based on your ADC scaling
-    int step_direction = 0; // -1: retract, 0: hold, 1: advance
 
     ESP_LOGI(TAG, "RMT channel enabled, entering main loop");
-    while (1) {
-        // Use the latest values directly, no need to take the semaphore here
-        uint32_t delay_ticks = last_capture_ticks;
-        int gap_voltage = adc_value_on_capture;
-        ESP_LOGI(TAG, "EDM: delay_ticks=%lu, gap_voltage=%d", delay_ticks, gap_voltage);
 
-        // Control logic
-        if (delay_ticks < SHORT_DELAY_TICKS && gap_voltage < LOW_VOLTAGE) {
-            step_direction = -1;
-            ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
-        } else if (delay_ticks > LONG_DELAY_TICKS && gap_voltage > HIGH_VOLTAGE) {
-            step_direction = 1;
-            ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
-        } else {
-            step_direction = 0;
-            ESP_LOGI(TAG, "EDM: Gap OK, holding position");
+    int jogging = 0; // 0: not jogging, 1: up, -1: down
+    while (1) {
+        int jog_up = gpio_get_level(JOG_UP_GPIO);
+        int jog_down = gpio_get_level(JOG_DOWN_GPIO);
+        int limit_switch = gpio_get_level(LIMIT_SWITCH_GPIO); // 1 = OK, 0 = limit hit
+        int start_cut = gpio_get_level(START_CUT_GPIO);       // 1 = start, 0 = stop
+
+        // If limit switch is OFF, inhibit all movement
+        if (!limit_switch) {
+            // Optionally, stop the motor if running
+            continue;
         }
-        
-        // Move stepper based on step_direction
-        if (step_direction == -1) {
-            gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
-            uint32_t steps = 5;
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
-            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
-        } else if (step_direction == 1) {
+
+        if (jog_up) {
+            jogging = 1;
             gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
-            uint32_t steps = 5;
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, NULL, 0, NULL));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
-        } // else hold (do nothing)
-        
-        vTaskDelay(pdMS_TO_TICKS(20)); // Always yield to avoid WDT
+            // Keep jogging at constant speed while button is held
+            while (gpio_get_level(JOG_UP_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
+                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, NULL, 0, NULL));
+                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                vTaskDelay(pdMS_TO_TICKS(1));
+            }
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, NULL, 0, NULL));
+            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            jogging = 0;
+        } else if (jog_down) {
+            jogging = -1;
+            gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, NULL, 0, NULL));
+            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            // Keep jogging at constant speed while button is held
+            while (gpio_get_level(JOG_DOWN_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
+                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, NULL, 0, NULL));
+                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                vTaskDelay(pdMS_TO_TICKS(1));
+            }
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, NULL, 0, NULL));
+            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            jogging = 0;
+        } else if (!jogging && limit_switch && start_cut) {
+            uint32_t delay_ticks = last_capture_ticks;
+            int gap_voltage = adc_value_on_capture;
+            ESP_LOGI(TAG, "EDM: delay_ticks=%lu, gap_voltage=%d", delay_ticks, gap_voltage);
+
+            // Control logic
+            int step_direction = 0;
+            if (delay_ticks < SHORT_DELAY_TICKS && gap_voltage < LOW_VOLTAGE) {
+                step_direction = -1;
+                ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
+            } else if (delay_ticks > LONG_DELAY_TICKS && gap_voltage > HIGH_VOLTAGE) {
+                step_direction = 1;
+                ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
+            } else {
+                step_direction = 0;
+                ESP_LOGI(TAG, "EDM: Gap OK, holding position");
+            }
+            // Move stepper based on step_direction
+            if (step_direction == -1) {
+                gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
+                uint32_t steps = 5;
+                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
+                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            } else if (step_direction == 1) {
+                gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
+                uint32_t steps = 5;
+                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
+                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            } // else hold (do nothing)
+            vTaskDelay(pdMS_TO_TICKS(20)); // Always yield to avoid WDT
+        }
     }
 
 }
