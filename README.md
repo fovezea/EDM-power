@@ -13,6 +13,22 @@ This example shows how to drive a stepper motor with a **STEP/DIR** interfaced c
 
 ## How to Use Example
 
+````
+
+````
+
+
+Made changes.
+
+The requested changes have been applied:
+
+- Added `LIMIT_SWITCH_GPIO` and `START_CUT_GPIO` as new input pins.
+- Both pins are now configured as inputs.
+- Jogging is only allowed if the limit switch is ON (not triggered).
+- EDM control only runs if not jogging, limit switch is ON, and start button is ON.
+- If the limit switch is OFF, all movement is inhibited (including jogging and EDM control).
+
+Loop now fully supports the new safety and control logic. 
 
 
 Connection :
@@ -49,6 +65,3 @@ The GPIO number used in this example can be changed according to your board, by 
 Run `idf.py -p PORT flash monitor` to build, flash and monitor the project.
 
 (To exit the serial monitor, type ``Ctrl-]``.)
-
-See the [Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/index.html) for full steps to configure and use ESP-IDF to build projects.
-
