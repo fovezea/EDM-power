@@ -21,7 +21,7 @@ void adc_on_capture_task(void *pvParameters)
     int last_valid = 0;
     const int MAX_JUMP = 200; // Max allowed jump between samples
     while (1) {
-        if (capture_semaphore && xSemaphoreTake(capture_semaphore, portMAX_DELAY) == pdTRUE) {
+        if (capture_semaphore && xSemaphoreTake(capture_semaphore, pdMS_TO_TICKS(100)) == pdTRUE) {
             int value = 0;
             esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &value);
             if (err == ESP_OK) {
@@ -42,6 +42,7 @@ void adc_on_capture_task(void *pvParameters)
                 ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
             }
         }
+        vTaskDelay(pdMS_TO_TICKS(10)); // Always yield to avoid WDT
     }
 }
 
