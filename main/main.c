@@ -135,15 +135,27 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
     ESP_LOGI(TAG, "RMT channel enabled, entering main loop");
 
     int jogging = 0; // 0: not jogging, 1: up, -1: down
+    bool encoder_running = false; // Track if encoder is running
     while (1) {
         int jog_up = gpio_get_level(JOG_UP_GPIO);
         int jog_down = gpio_get_level(JOG_DOWN_GPIO);
         int limit_switch = gpio_get_level(LIMIT_SWITCH_GPIO); // 1 = OK, 0 = limit hit
         int start_cut = gpio_get_level(START_CUT_GPIO);       // 1 = start, 0 = stop
 
+        jog_up = 0;        // For testing, set to 1 to simulate button press
+        jog_down = 0;      // For testing, set to 0 to simulate no button press
+        limit_switch = 1; // 1 = OK, 0 = limit hit
+        start_cut = 1;    // 1 = start, 0 = stop  
+
+
         // If limit switch is OFF, inhibit all movement
         if (!limit_switch) {
-            // Optionally, stop the motor if running
+            // Stop the encoder if running
+            if (encoder_running) {
+                rmt_disable(motor_chan);
+                encoder_running = false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(20)); // Yield to avoid WDT and CPU hogging
             continue;
         }
 
@@ -151,8 +163,10 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
             jogging = 1;
             gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
             uint32_t steps = 1;
-         //   ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), NULL));
-         //   ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            // Start encoder for jogging up
+            // ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), NULL));
+            // ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            encoder_running = true;
             // Keep jogging at constant speed while button is held
             while (gpio_get_level(JOG_UP_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
           //      ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
@@ -168,6 +182,7 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
             uint32_t steps = 1;
          //   ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), NULL));
           //  ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            encoder_running = true;
             // Keep jogging at constant speed while button is held
             while (gpio_get_level(JOG_DOWN_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
              //   ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
@@ -176,6 +191,7 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
             }
             ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), NULL));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            encoder_running = true;
             jogging = 0;
         } else if (!jogging && limit_switch && start_cut) {
             uint32_t delay_ticks = last_capture_ticks;
@@ -200,11 +216,13 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
                 uint32_t steps = 5;
                 ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
                 ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                encoder_running = true;
             } else if (step_direction == 1) {
                 gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
                 uint32_t steps = 5;
                 ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
                 ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                encoder_running = true;
             } // else hold (do nothing)
             vTaskDelay(pdMS_TO_TICKS(20)); // Always yield to avoid WDT
         }
