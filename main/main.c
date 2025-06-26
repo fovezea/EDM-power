@@ -150,29 +150,31 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
         if (jog_up) {
             jogging = 1;
             gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, NULL, 0, NULL));
-            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            uint32_t steps = 1;
+         //   ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), NULL));
+         //   ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             // Keep jogging at constant speed while button is held
             while (gpio_get_level(JOG_UP_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
-                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, NULL, 0, NULL));
-                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+          //      ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
+          //      ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, NULL, 0, NULL));
-            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+         //   ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), NULL));
+         //   ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             jogging = 0;
         } else if (jog_down) {
             jogging = -1;
-            gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, NULL, 0, NULL));
-            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+          //  gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
+            uint32_t steps = 1;
+         //   ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), NULL));
+          //  ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             // Keep jogging at constant speed while button is held
             while (gpio_get_level(JOG_DOWN_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
-                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, NULL, 0, NULL));
-                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+             //   ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
+             //   ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, NULL, 0, NULL));
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), NULL));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             jogging = 0;
         } else if (!jogging && limit_switch && start_cut) {
