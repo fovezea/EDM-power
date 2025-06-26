@@ -39,11 +39,14 @@ QueueHandle_t pwm_adc_queue = NULL;
 
 // Only extern variables that are defined in other files and actually used in main.c
 extern volatile uint32_t last_capture_ticks;
+extern volatile uint32_t delay_ticks; // Add extern for delay_ticks
 extern volatile int adc_value_on_capture;
-// capture_semaphore and adc_calibration_init are not used in main.c, so removed
+extern SemaphoreHandle_t capture_semaphore;
 
 // Extern declaration for adc_on_capture_task (defined in ADC.c)
 extern void adc_on_capture_task(void *pvParameters);
+extern void mcpwm_halfbridge_task(void *pvParameters);
+extern void adc_oneshot_init(void); // Add extern for ADC init
 
 // Local static/global variables (defined in this file and actually used)
 static rmt_channel_handle_t motor_chan;
@@ -92,29 +95,35 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
     gpio_set_level(STEP_MOTOR_GPIO_EN, STEP_MOTOR_ENABLE_LEVEL);
 
     ESP_LOGI(TAG, "Create motor encoders");
-    stepper_motor_curve_encoder_config_t accel_encoder_config = {
-        .resolution = STEP_MOTOR_RESOLUTION_HZ,
-        .sample_points = 500,
-        .start_freq_hz = 500,
-        .end_freq_hz = 1500,
-    };
-    //rmt_encoder_handle_t accel_motor_encoder = NULL;
+    stepper_motor_curve_encoder_config_t accel_encoder_config = {0};
+    accel_encoder_config.resolution = STEP_MOTOR_RESOLUTION_HZ;
+    accel_encoder_config.sample_points = 500;
+    accel_encoder_config.start_freq_hz = 500;
+    accel_encoder_config.end_freq_hz = 1500;
     ESP_ERROR_CHECK(rmt_new_stepper_motor_curve_encoder(&accel_encoder_config, &accel_motor_encoder));
+    if (accel_motor_encoder == NULL) {
+        ESP_LOGE(TAG, "Failed to create accel_motor_encoder");
+        return;
+    }
 
-    stepper_motor_uniform_encoder_config_t uniform_encoder_config = {
-        .resolution = STEP_MOTOR_RESOLUTION_HZ,
-    };
-    //rmt_encoder_handle_t uniform_motor_encoder = NULL;
+    stepper_motor_uniform_encoder_config_t uniform_encoder_config = {0};
+    uniform_encoder_config.resolution = STEP_MOTOR_RESOLUTION_HZ;
     ESP_ERROR_CHECK(rmt_new_stepper_motor_uniform_encoder(&uniform_encoder_config, &uniform_motor_encoder));
+    if (uniform_motor_encoder == NULL) {
+        ESP_LOGE(TAG, "Failed to create uniform_motor_encoder");
+        return;
+    }
 
-    stepper_motor_curve_encoder_config_t decel_encoder_config = {
-        .resolution = STEP_MOTOR_RESOLUTION_HZ,
-        .sample_points = 500,
-        .start_freq_hz = 1500,
-        .end_freq_hz = 500,
-    };
-    //rmt_encoder_handle_t decel_motor_encoder = NULL;
+    stepper_motor_curve_encoder_config_t decel_encoder_config = {0};
+    decel_encoder_config.resolution = STEP_MOTOR_RESOLUTION_HZ;
+    decel_encoder_config.sample_points = 500;
+    decel_encoder_config.start_freq_hz = 1500;
+    decel_encoder_config.end_freq_hz = 500;
     ESP_ERROR_CHECK(rmt_new_stepper_motor_curve_encoder(&decel_encoder_config, &decel_motor_encoder));
+    if (decel_motor_encoder == NULL) {
+        ESP_LOGE(TAG, "Failed to create decel_motor_encoder");
+        return;
+    }
 
     ESP_LOGI(TAG, "Enable RMT channel");
     // Debug: print motor_chan handle before enabling
@@ -126,14 +135,16 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
     }
     // Variable declarations moved to function scope
     extern volatile uint32_t last_capture_ticks;
+    extern volatile uint32_t delay_ticks;
     extern volatile int adc_value_on_capture;
     const uint32_t SHORT_DELAY_TICKS = 100; // adjust based on your timing
     const int LOW_VOLTAGE = 500;            // adjust based on your ADC scaling
     const uint32_t LONG_DELAY_TICKS = 500;  // adjust based on your timing
     const int HIGH_VOLTAGE = 2000;          // adjust based on your ADC scaling
 
-    ESP_LOGI(TAG, "RMT channel enabled, entering main loop");
+    // ESP_LOGI(TAG, "RMT channel enabled, entering main loop");
 
+    rmt_transmit_config_t tx_config = { .loop_count = 0 };
     int jogging = 0; // 0: not jogging, 1: up, -1: down
     bool encoder_running = false; // Track if encoder is running
     while (1) {
@@ -160,68 +171,89 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
         }
 
         if (jog_up) {
+            ESP_LOGI(TAG, "Jog UP pressed");
             jogging = 1;
             gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
             uint32_t steps = 1;
-            // Start encoder for jogging up
-            // ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), NULL));
-            // ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            ESP_LOGI(TAG, "Jog UP: accel phase");
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), &tx_config));
+            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             encoder_running = true;
             // Keep jogging at constant speed while button is held
             while (gpio_get_level(JOG_UP_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
-          //      ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
-          //      ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                ESP_LOGI(TAG, "Jog UP: uniform phase");
+                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), &tx_config));
+                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
-         //   ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), NULL));
-         //   ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            ESP_LOGI(TAG, "Jog UP: decel phase");
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), &tx_config));
+            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             jogging = 0;
         } else if (jog_down) {
+            ESP_LOGI(TAG, "Jog DOWN pressed");
             jogging = -1;
-          //  gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
+            gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
             uint32_t steps = 1;
-         //   ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), NULL));
-          //  ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+            ESP_LOGI(TAG, "Jog DOWN: accel phase");
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), &tx_config));
+            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             encoder_running = true;
             // Keep jogging at constant speed while button is held
             while (gpio_get_level(JOG_DOWN_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
-             //   ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
-             //   ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                ESP_LOGI(TAG, "Jog DOWN: uniform phase");
+                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), &tx_config));
+                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
-            ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), NULL));
+            ESP_LOGI(TAG, "Jog DOWN: decel phase");
+            ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), &tx_config));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             encoder_running = true;
             jogging = 0;
         } else if (!jogging && limit_switch && start_cut) {
-            uint32_t delay_ticks = last_capture_ticks;
+            // Use delay_ticks from capture ISR
+            float delay_ms = delay_ticks / 1000.0f; // 1 tick = 1 us (10 MHz timer)
             int gap_voltage = adc_value_on_capture;
-            ESP_LOGI(TAG, "EDM: delay_ticks=%lu, gap_voltage=%d", delay_ticks, gap_voltage);
-
+            ESP_LOGI(TAG, "DEBUG: delay_ticks=%lu (%.2f ms), gap_voltage=%d", delay_ticks, delay_ms, gap_voltage); // Debug print
             // Control logic
             int step_direction = 0;
             if (delay_ticks < SHORT_DELAY_TICKS && gap_voltage < LOW_VOLTAGE) {
                 step_direction = -1;
-                ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
+                // ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
             } else if (delay_ticks > LONG_DELAY_TICKS && gap_voltage > HIGH_VOLTAGE) {
                 step_direction = 1;
-                ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
+                // ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
             } else {
                 step_direction = 0;
-                ESP_LOGI(TAG, "EDM: Gap OK, holding position");
+                // ESP_LOGI(TAG, "EDM: Gap OK, holding position");
             }
             // Move stepper based on step_direction
             if (step_direction == -1) {
                 gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
                 uint32_t steps = 5;
-                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
-                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                if (motor_chan == NULL || uniform_motor_encoder == NULL) {
+                    ESP_LOGE(TAG, "motor_chan or uniform_motor_encoder is NULL!");
+                } else {
+                    esp_err_t tx_err = rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), &tx_config);
+                    if (tx_err != ESP_OK) {
+                        ESP_LOGE(TAG, "rmt_transmit failed: %s", esp_err_to_name(tx_err));
+                    }
+                    ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                }
                 encoder_running = true;
             } else if (step_direction == 1) {
                 gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
                 uint32_t steps = 5;
-                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), NULL));
-                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                if (motor_chan == NULL || uniform_motor_encoder == NULL) {
+                    ESP_LOGE(TAG, "motor_chan or uniform_motor_encoder is NULL!");
+                } else {
+                    esp_err_t tx_err = rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), &tx_config);
+                    if (tx_err != ESP_OK) {
+                        ESP_LOGE(TAG, "rmt_transmit failed: %s", esp_err_to_name(tx_err));
+                    }
+                    ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                }
                 encoder_running = true;
             } // else hold (do nothing)
             vTaskDelay(pdMS_TO_TICKS(20)); // Always yield to avoid WDT
@@ -230,8 +262,6 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
 
 }
 
-
-
 void app_main(void)
 {
     pwm_adc_queue = xQueueCreate(1, sizeof(int));
@@ -239,5 +269,9 @@ void app_main(void)
     xTaskCreate(stepper_task, "stepper_task", 4096, NULL, 5, NULL);
     ESP_LOGI(TAG, "Stepper motor example started");
 
+    adc_oneshot_init(); // Initialize ADC before starting ADC task
     xTaskCreate(adc_on_capture_task, "adc_on_capture_task", 2048, NULL, 10, NULL); // High priority for fast ADC
+
+    // Start MCPWM task for power train
+    xTaskCreate(mcpwm_halfbridge_task, "mcpwm_halfbridge_task", 4096, NULL, 5, NULL);
 }

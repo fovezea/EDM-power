@@ -21,12 +21,15 @@ void adc_on_capture_task(void *pvParameters)
     int last_valid = 0;
     const int MAX_JUMP = 200; // Max allowed jump between samples
     while (1) {
+        ESP_LOGI(TAG, "ADC task running, waiting for capture_semaphore...");
         if (capture_semaphore && xSemaphoreTake(capture_semaphore, pdMS_TO_TICKS(100)) == pdTRUE) {
             int value = 0;
             esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &value);
+            ESP_LOGI(TAG, "ADC raw read: %d (err=%s)", value, esp_err_to_name(err));
             if (err == ESP_OK) {
                 // Simple outlier filter: if value is too far from last valid, ignore
                 if (buffer_index > 0 && abs(value - last_valid) > MAX_JUMP) {
+                    ESP_LOGW(TAG, "ADC outlier detected: %d (last_valid=%d)", value, last_valid);
                     value = last_valid; // Clamp to last valid
                 }
                 adc_buffer[buffer_index] = value;
@@ -105,4 +108,28 @@ void adc_calibration_deinit(adc_cali_handle_t handle)
     ESP_LOGI(TAG, "deregister %s calibration scheme", "Line Fitting");
     ESP_ERROR_CHECK(adc_cali_delete_scheme_line_fitting(handle));
 #endif
+}
+
+// ADC initialization function
+void adc_oneshot_init(void)
+{
+    adc_oneshot_unit_init_cfg_t init_config = {
+        .unit_id = ADC_UNIT_1,
+        .ulp_mode = false
+    };
+    esp_err_t err = adc_oneshot_new_unit(&init_config, &adc_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize ADC oneshot unit: %s", esp_err_to_name(err));
+        adc_handle = NULL;
+        return;
+    }
+    adc_oneshot_chan_cfg_t chan_cfg = {
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+        .atten = ADC_ATTEN_DB_11
+    };
+    err = adc_oneshot_config_channel(adc_handle, ADC_CHANNEL_6, &chan_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure ADC channel: %s", esp_err_to_name(err));
+        adc_handle = NULL;
+    }
 }

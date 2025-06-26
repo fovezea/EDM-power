@@ -3,6 +3,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "freertos/semphr.h"
+#include "esp_rom_sys.h"
 
 #define MCPWM_GPIO_PWM0A   16
 #define MCPWM_GPIO_PWM0B   17
@@ -11,23 +12,23 @@
 #define DEAD_TIME_NS       100
 
 volatile int duty_percent = 40; // Start with 40%, change this variable from elsewhere
+volatile uint32_t last_pwm_rising_ticks = 0; // Timestamp of last PWM rising edge
 volatile uint32_t last_capture_ticks = 0;
+volatile uint32_t delay_ticks = 0; // Store the interval between PWM and capture
 SemaphoreHandle_t capture_semaphore = NULL;
+
+// Callback for PWM rising edge (when PWM0B goes HIGH)
+// Removed unused/incompatible PWM generator callback
 
 static bool IRAM_ATTR capture_cb(mcpwm_cap_channel_handle_t cap_chan, const mcpwm_capture_event_data_t *edata, void *user_data)
 {
-    last_capture_ticks = edata->cap_value;
-    static uint32_t capture_counter = 0;
-    capture_counter++;
-    if (capture_counter >= 100) { // Trigger every 100th event (adjust as needed)
-        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-        if (capture_semaphore) {
-            xSemaphoreGiveFromISR(capture_semaphore, &xHigherPriorityTaskWoken);
-        }
-        if (xHigherPriorityTaskWoken) {
-            portYIELD_FROM_ISR();
-        }
-        capture_counter = 0;
+    // Only trigger the ADC task (e.g., by giving the semaphore)
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (capture_semaphore) {
+        xSemaphoreGiveFromISR(capture_semaphore, &xHigherPriorityTaskWoken);
+    }
+    if (xHigherPriorityTaskWoken) {
+        portYIELD_FROM_ISR();
     }
     return false;
 }
@@ -128,6 +129,15 @@ void mcpwm_halfbridge_task(void *pvParameters)
 
         uint32_t duty_ticks = period_ticks * local_duty / 100;
         ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(comparator, duty_ticks));
+
+        // Small delay to allow current to propagate after high side turns on
+        esp_rom_delay_us(2); // Adjust as needed for your hardware
+
+        // Trigger ADC task via semaphore (like before)
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        if (capture_semaphore) {
+            xSemaphoreGive(capture_semaphore);
+        }
 
         vTaskDelay(pdMS_TO_TICKS(20)); // Update rate
     }
