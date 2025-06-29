@@ -39,7 +39,6 @@ QueueHandle_t pwm_adc_queue = NULL;
 
 // Only extern variables that are defined in other files and actually used in main.c
 extern volatile uint32_t last_capture_ticks;
-extern volatile uint32_t delay_ticks; // Add extern for delay_ticks
 extern volatile int adc_value_on_capture;
 extern SemaphoreHandle_t capture_semaphore;
 
@@ -59,7 +58,8 @@ void stepper_task(void *pvParameters)
 {
  
     ////////////////////////
-ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
+    // Configure EN + DIR as outputs
+    ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
     gpio_config_t en_dir_gpio_config = {
         .mode = GPIO_MODE_OUTPUT,
         .intr_type = GPIO_INTR_DISABLE,
@@ -67,16 +67,25 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
     };
     ESP_ERROR_CHECK(gpio_config(&en_dir_gpio_config));
 
-
-    //ESP_LOGI(TAG, "Initialize  GPIO");
-        gpio_config_t jog_gpio_config = {
+    // Configure jog and limit GPIOs
+    ESP_LOGI(TAG, "Initialize jog and limit GPIOs");
+    gpio_config_t jog_gpio_config = {
         .mode = GPIO_MODE_INPUT,
         .intr_type = GPIO_INTR_DISABLE,
-        .pin_bit_mask = (1ULL << JOG_UP_GPIO) | (1ULL << JOG_DOWN_GPIO) | (1ULL << LIMIT_SWITCH_GPIO) | (1ULL << START_CUT_GPIO),
+        .pin_bit_mask = (1ULL << JOG_UP_GPIO) | (1ULL << JOG_DOWN_GPIO),
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&jog_gpio_config));
+
+    gpio_config_t limit_gpio_config = {
+        .mode = GPIO_MODE_INPUT,
+        .intr_type = GPIO_INTR_DISABLE,
+        .pin_bit_mask = (1ULL << LIMIT_SWITCH_GPIO) | (1ULL << START_CUT_GPIO),
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
     };
-    ESP_ERROR_CHECK(gpio_config(&jog_gpio_config));
+    ESP_ERROR_CHECK(gpio_config(&limit_gpio_config));
 
     ESP_LOGI(TAG, "Create RMT TX channel");
     //rmt_channel_handle_t motor_chan = NULL;
@@ -135,11 +144,8 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
     }
     // Variable declarations moved to function scope
     extern volatile uint32_t last_capture_ticks;
-    extern volatile uint32_t delay_ticks;
     extern volatile int adc_value_on_capture;
-    const uint32_t SHORT_DELAY_TICKS = 100; // adjust based on your timing
     const int LOW_VOLTAGE = 500;            // adjust based on your ADC scaling
-    const uint32_t LONG_DELAY_TICKS = 500;  // adjust based on your timing
     const int HIGH_VOLTAGE = 2000;          // adjust based on your ADC scaling
 
     // ESP_LOGI(TAG, "RMT channel enabled, entering main loop");
@@ -153,13 +159,24 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
         int limit_switch = gpio_get_level(LIMIT_SWITCH_GPIO); // 1 = OK, 0 = limit hit
         int start_cut = gpio_get_level(START_CUT_GPIO);       // 1 = start, 0 = stop
 
-        jog_up = 0;        // For testing, set to 1 to simulate button press
-        jog_down = 0;      // For testing, set to 0 to simulate no button press
-        limit_switch = 1; // 1 = OK, 0 = limit hit
-        start_cut = 1;    // 1 = start, 0 = stop  
+       // jog_up = 0;        // For testing, set to 1 to simulate button press
+       // jog_down = 0;      // For testing, set to 0 to simulate no button press
+       // limit_switch = 1; // 1 = OK, 0 = limit hit
+       // start_cut = 1;    // 1 = start, 0 = stop  
 
 
         // If limit switch is OFF, inhibit all movement
+        /*        if (!limit_switch) {
+            ESP_LOGI(TAG, "Limit switch hit, stopping all movement");
+            // Stop the encoder if running
+            if (encoder_running) {
+                rmt_disable(motor_chan);
+                encoder_running = false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(20)); // Yield to avoid WDT and CPU hogging
+            continue;
+        }
+        
         if (!limit_switch) {
             // Stop the encoder if running
             if (encoder_running) {
@@ -169,8 +186,10 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
             vTaskDelay(pdMS_TO_TICKS(20)); // Yield to avoid WDT and CPU hogging
             continue;
         }
+        */
 
-        if (jog_up) {
+             // if limit switch is OFF, inhibit Jog UP for now
+        if (jog_up && !limit_switch) {
             ESP_LOGI(TAG, "Jog UP pressed");
             jogging = 1;
             gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
@@ -212,21 +231,21 @@ ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
             encoder_running = true;
             jogging = 0;
         } else if (!jogging && limit_switch && start_cut) {
-            // Use delay_ticks from capture ISR
-            float delay_ms = delay_ticks / 1000.0f; // 1 tick = 1 us (10 MHz timer)
+            ESP_LOGI(TAG, "Start EDM cut");
+            // int delay_ticks = 0; // Removed: delay_ticks no longer used
             int gap_voltage = adc_value_on_capture;
-            ESP_LOGI(TAG, "DEBUG: delay_ticks=%lu (%.2f ms), gap_voltage=%d", delay_ticks, delay_ms, gap_voltage); // Debug print
+            ESP_LOGI(TAG, "DEBUG: gap_voltage=%d", gap_voltage); // Debug print
             // Control logic
             int step_direction = 0;
-            if (delay_ticks < SHORT_DELAY_TICKS && gap_voltage < LOW_VOLTAGE) {
+            if (gap_voltage < LOW_VOLTAGE) {
                 step_direction = -1;
-                // ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
-            } else if (delay_ticks > LONG_DELAY_TICKS && gap_voltage > HIGH_VOLTAGE) {
+                 ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
+            } else if (gap_voltage > HIGH_VOLTAGE) {
                 step_direction = 1;
-                // ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
+                 ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
             } else {
                 step_direction = 0;
-                // ESP_LOGI(TAG, "EDM: Gap OK, holding position");
+                 ESP_LOGI(TAG, "EDM: Gap OK, holding position");
             }
             // Move stepper based on step_direction
             if (step_direction == -1) {

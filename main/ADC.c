@@ -21,11 +21,11 @@ void adc_on_capture_task(void *pvParameters)
     int last_valid = 0;
     const int MAX_JUMP = 200; // Max allowed jump between samples
     while (1) {
-        ESP_LOGI(TAG, "ADC task running, waiting for capture_semaphore...");
+      //  ESP_LOGI(TAG, "ADC task running, waiting for capture_semaphore...");
         if (capture_semaphore && xSemaphoreTake(capture_semaphore, pdMS_TO_TICKS(100)) == pdTRUE) {
             int value = 0;
             esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &value);
-            ESP_LOGI(TAG, "ADC raw read: %d (err=%s)", value, esp_err_to_name(err));
+           // ESP_LOGI(TAG, "ADC raw read: %d (err=%s)", value, esp_err_to_name(err));
             if (err == ESP_OK) {
                 // Simple outlier filter: if value is too far from last valid, ignore
                 if (buffer_index > 0 && abs(value - last_valid) > MAX_JUMP) {
@@ -40,7 +40,7 @@ void adc_on_capture_task(void *pvParameters)
                 int avg = sum / FILTER_WINDOW;
                 adc_value_on_capture = avg;
                 last_valid = value;
-                ESP_LOGI(TAG, "ADC value (filtered avg): %d", adc_value_on_capture);
+                // ESP_LOGI(TAG, "ADC value (filtered avg): %d", adc_value_on_capture);
             } else {
                 ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
             }
