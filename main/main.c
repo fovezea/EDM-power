@@ -115,11 +115,14 @@ void stepper_task(void *pvParameters)
         return;
     }
 
-    // Jog encoder: use same encoder, but send more steps for jog
+    // Jog encoder: use curve encoder for configurable jog speed
     static rmt_encoder_handle_t jog_motor_encoder = NULL;
-    stepper_motor_uniform_encoder_config_t jog_encoder_config = {0};
-    jog_encoder_config.resolution = STEP_MOTOR_RESOLUTION_HZ;
-    ESP_ERROR_CHECK(rmt_new_stepper_motor_uniform_encoder(&jog_encoder_config, &jog_motor_encoder));
+    stepper_motor_curve_encoder_config_t jog_curve_config = {0};
+    jog_curve_config.resolution = STEP_MOTOR_RESOLUTION_HZ;
+    jog_curve_config.sample_points = 2; // For constant speed, must be <= |start_freq_hz - end_freq_hz|
+    jog_curve_config.start_freq_hz = 3000; // Set jog speed here (Hz)
+    jog_curve_config.end_freq_hz = 2998;   // Must not be equal to start_freq_hz, and difference >= sample_points
+    ESP_ERROR_CHECK(rmt_new_stepper_motor_curve_encoder(&jog_curve_config, &jog_motor_encoder));
     if (jog_motor_encoder == NULL) {
         ESP_LOGE(TAG, "Failed to create jog_motor_encoder");
         return;
@@ -193,7 +196,7 @@ const static uint32_t uniform_speed_hz = 4500; // Set a constant speed for joggi
             ESP_LOGI(TAG, "Jog UP pressed");
             jogging = 1;
             gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE); // Retract direction
-            uint32_t steps = 100; // More steps for faster jog
+            uint32_t steps = 10; // More steps for faster jog
             ESP_LOGI(TAG, "Jog UP: accel phase");
             ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), &tx_config));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
@@ -210,7 +213,7 @@ const static uint32_t uniform_speed_hz = 4500; // Set a constant speed for joggi
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
             ESP_LOGI(TAG, "Jog UP: decel phase");
-            steps = 100;
+            steps = 10;
             ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), &tx_config));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             jogging = 0;
@@ -218,7 +221,7 @@ const static uint32_t uniform_speed_hz = 4500; // Set a constant speed for joggi
             ESP_LOGI(TAG, "Jog DOWN pressed");
             jogging = -1;
             gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
-            uint32_t steps = 100; // More steps for faster jog
+            uint32_t steps = 10; // More steps for faster jog
             ESP_LOGI(TAG, "Jog DOWN: accel phase");
             ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), &tx_config));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
@@ -234,7 +237,7 @@ const static uint32_t uniform_speed_hz = 4500; // Set a constant speed for joggi
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
             ESP_LOGI(TAG, "Jog DOWN: decel phase");
-            steps = 100;
+            steps = 10;
             ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), &tx_config));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             encoder_running = true;
