@@ -162,7 +162,7 @@ void stepper_task(void *pvParameters)
     const int HIGH_VOLTAGE = 2000;          // adjust based on your ADC scaling
 
     // ESP_LOGI(TAG, "RMT channel enabled, entering main loop");
-const static uint32_t uniform_speed_hz = 4500; // Set a constant speed for jogging
+
     rmt_transmit_config_t tx_config = { .loop_count = 0 };
     int jogging = 0; // 0: not jogging, 1: up, -1: down
     bool encoder_running = false; // Track if encoder is running
@@ -172,12 +172,7 @@ const static uint32_t uniform_speed_hz = 4500; // Set a constant speed for joggi
         int limit_switch = gpio_get_level(LIMIT_SWITCH_GPIO); // 1 = OK, 0 = limit hit
         int start_cut = gpio_get_level(START_CUT_GPIO);       // 1 = start, 0 = stop
 
-       // jog_up = 0;        // For testing, set to 1 to simulate button press
-       // jog_down = 0;      // For testing, set to 0 to simulate no button press
-       // limit_switch = 1; // 1 = OK, 0 = limit hit
-       // start_cut = 1;    // 1 = start, 0 = stop  
-
-
+      
         // If limit switch is OFF, inhibit all movement
         if (!limit_switch) {
             ESP_LOGI(TAG, "Limit switch hit, stopping all movement");
@@ -205,10 +200,8 @@ const static uint32_t uniform_speed_hz = 4500; // Set a constant speed for joggi
             while (gpio_get_level(JOG_UP_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
                 ESP_LOGI(TAG, "Jog UP: uniform phase");
 
-                 // uniform phase
-       // tx_config.loop_count = 0;
-        ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &uniform_speed_hz, sizeof(uniform_speed_hz), &tx_config));
-                ESP_ERROR_CHECK(rmt_transmit(motor_chan, jog_motor_encoder, &steps, sizeof(steps), &tx_config));
+                //ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &uniform_speed_hz, sizeof(uniform_speed_hz), &tx_config));
+               ESP_ERROR_CHECK(rmt_transmit(motor_chan, jog_motor_encoder, &steps, sizeof(steps), &tx_config));
                 ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
@@ -229,9 +222,8 @@ const static uint32_t uniform_speed_hz = 4500; // Set a constant speed for joggi
             // Keep jogging at constant speed while button is held
             while (gpio_get_level(JOG_DOWN_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
                 ESP_LOGI(TAG, "Jog DOWN: uniform phase");
-                ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &uniform_speed_hz, sizeof(uniform_speed_hz), &tx_config));
-                
-                
+                //ESP_ERROR_CHECK(rmt_transmit(motor_chan, uniform_motor_encoder, &uniform_speed_hz, sizeof(uniform_speed_hz), &tx_config));
+                ESP_ERROR_CHECK(rmt_transmit(motor_chan, jog_motor_encoder, &steps, sizeof(steps), &tx_config));
                 //ESP_ERROR_CHECK(rmt_transmit(motor_chan, jog_motor_encoder, &steps, sizeof(steps), &tx_config));
                 ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
                 vTaskDelay(pdMS_TO_TICKS(1));
