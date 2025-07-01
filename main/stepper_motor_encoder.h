@@ -53,6 +53,15 @@ esp_err_t rmt_new_stepper_motor_curve_encoder(const stepper_motor_curve_encoder_
  */
 esp_err_t rmt_new_stepper_motor_uniform_encoder(const stepper_motor_uniform_encoder_config_t *config, rmt_encoder_handle_t *ret_encoder);
 
+/**
+ * @brief Calculate stepper frequency (Hz) from speed (mm/s), steps/rev, and leadscrew pitch (mm)
+ * @param speed_mm_per_s Desired speed in mm/s
+ * @param steps_per_rev Stepper pulses per revolution (e.g., 200)
+ * @param leadscrew_pitch_mm Leadscrew pitch in mm/rev (e.g., 4.0)
+ * @return Frequency in Hz
+ */
+double stepper_calc_freq_from_speed(double speed_mm_per_s, int steps_per_rev, double leadscrew_pitch_mm);
+
 #ifdef __cplusplus
 }
 #endif

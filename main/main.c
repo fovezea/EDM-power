@@ -32,6 +32,12 @@
 
 #define STEP_MOTOR_RESOLUTION_HZ 1000000 // 1MHz resolution
 
+// Speed and leadscrew pitch settings
+double jog_speed_mm_per_s = 1; // Speed in mm/s, can be set from elsewhere
+double cut_speed_mm_per_s = 0.1; // Speed in mm/s, can be set from elsewhere
+double leadscrew_pitch_mm = 4.0; // Leadscrew pitch in mm/rev
+double steps_per_rev = 200; // Pulses per revolution (e.g., 200 for 1.8 degree stepper)
+
 static const char *TAG = "main";
 
 #include "freertos/queue.h"
@@ -87,6 +93,15 @@ void stepper_task(void *pvParameters)
     };
     ESP_ERROR_CHECK(gpio_config(&limit_gpio_config));
 
+    //calculate stepper frequency from mm/s
+    double jog_freq_hz = stepper_calc_freq_from_speed(jog_speed_mm_per_s, steps_per_rev, leadscrew_pitch_mm);
+    ESP_LOGI(TAG, "Calculated stepper jog frequency: %.2f Hz", jog_freq_hz);
+    //calculate cut frequency from mm/s
+    double cut_freq_hz = stepper_calc_freq_from_speed(cut_speed_mm_per_s, steps_per_rev, leadscrew_pitch_mm);
+    ESP_LOGI(TAG, "Calculated stepper cut frequency: %.2f Hz", cut_freq_hz);
+
+
+    // Create RMT TX channel
     ESP_LOGI(TAG, "Create RMT TX channel");
     //rmt_channel_handle_t motor_chan = NULL;
     rmt_tx_channel_config_t tx_chan_config = {

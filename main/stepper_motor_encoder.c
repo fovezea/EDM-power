@@ -181,3 +181,11 @@ err:
     }
     return ret;
 }
+
+// Utility function: calculate stepper frequency from mm/s
+// speed_mm_per_s: desired speed in mm/s
+// steps_per_rev: stepper pulses per revolution (e.g., 200)
+// leadscrew_pitch_mm: mm per revolution (e.g., 4.0)
+double stepper_calc_freq_from_speed(double speed_mm_per_s, int steps_per_rev, double leadscrew_pitch_mm) {
+    return (speed_mm_per_s * steps_per_rev) / leadscrew_pitch_mm;
+}
