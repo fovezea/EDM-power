@@ -1,8 +1,10 @@
 
 
 # RMT Based Stepper Motor Smooth Controller
-# MCPWM based pwm controller for EDM power supply
 
+## MCPWM based pwm controller for EDM power supply
+
+# Current branch is stepper-working
 
 One RMT TX channel can use different encoders in sequence, which is useful to generate waveforms that have obvious multiple stages.
 
@@ -14,13 +16,6 @@ This example shows how to drive a stepper motor with a **STEP/DIR** interfaced c
 ## How to Use Example
 
 ````
-
-````
-
-
-Made changes.
-
-The requested changes have been applied:
 
 - Added `LIMIT_SWITCH_GPIO` and `START_CUT_GPIO` as new input pins.
 - Both pins are now configured as inputs.
@@ -58,7 +53,7 @@ Connection :
 +---------------------------+             +--------------------+      +------------------+
 ```
 
-The GPIO number used in this example can be changed according to your board, by the macro `STEP_MOTOR_GPIO_EN`, `STEP_MOTOR_GPIO_DIR` and `STEP_MOTOR_GPIO_STEP` defined in the [source file](main/main.c).
+The GPIO number used can be changed according to your board, by the macro `STEP_MOTOR_GPIO_EN`, `STEP_MOTOR_GPIO_DIR` and `STEP_MOTOR_GPIO_STEP` defined in the [source file](main/main.c).
 
 ### Build and Flash
 
