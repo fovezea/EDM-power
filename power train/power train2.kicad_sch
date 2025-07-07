@@ -730,7 +730,6 @@
 				(effects
 					(font
 						(size 1.27 1.27)
-						(italic yes)
 					)
 					(justify left)
 					(hide yes)
@@ -2728,6 +2727,7 @@
 					(italic yes)
 				)
 				(justify left)
+				(hide yes)
 			)
 		)
 		(property "Datasheet" ""
@@ -2740,7 +2740,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" ""
+		(property "Description" "160A, 600V, N-Channel IGBT"
 			(at 142.24 93.98 0)
 			(effects
 				(font

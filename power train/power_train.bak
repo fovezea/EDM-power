@@ -1343,7 +1343,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "Library:SIP-16"
+		(property "Footprint" "Library:VLA517"
 			(at 0 0 0)
 			(effects
 				(font

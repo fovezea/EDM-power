@@ -283,7 +283,6 @@
 			(effects
 				(font
 					(size 1.27 1.27)
-					(italic yes)
 				)
 				(justify left)
 				(hide yes)
