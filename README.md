@@ -26,7 +26,7 @@
 
 One RMT TX channel can use different encoders in sequence, which is useful to generate waveforms that have multiple stages.
 
-This project shows how to drive a stepper motor with a **STEP/DIR** interface controller (e.g. [DRV8825](https://www.ti.com/lit/ds/symlink/drv8825.pdf)) in a [smooth](https://en.wikipedia.org/wiki/Smoothstep) way. To smoothly drive a stepper motor, there are three phases: **Acceleration**, **Uniform**, and **Deceleration**. The code implements two encoders so that the RMT channel can generate waveforms with different characteristics:
+To smoothly drive a stepper motor, there are three phases: **Acceleration**, **Uniform**, and **Deceleration**. The code implements two encoders so that the RMT channel can generate waveforms with different characteristics:
 
 * `curve_encoder` encodes the **Acceleration** and **Deceleration** phases
 * `uniform_encoder` encodes the **Uniform** phase
