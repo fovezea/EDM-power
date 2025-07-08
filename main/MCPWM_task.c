@@ -17,8 +17,9 @@ volatile uint32_t last_capture_ticks = 0;
 volatile uint32_t delay_ticks = 0; // Store the interval between PWM and capture
 SemaphoreHandle_t capture_semaphore = NULL;
 
-// Callback for PWM rising edge (when PWM0B goes HIGH)
-// Removed unused/incompatible PWM generator callback
+extern volatile int adc_value_on_capture;
+
+
 
 static bool IRAM_ATTR capture_cb(mcpwm_cap_channel_handle_t cap_chan, const mcpwm_capture_event_data_t *edata, void *user_data)
 {
@@ -121,17 +122,41 @@ void mcpwm_halfbridge_task(void *pvParameters)
     }
     duty_percent = 40; // Ensure main loop starts at 40%
 
+    // PID control variables
+    static double pid_integral = 0;
+    static double pid_prev_error = 0;
+    const double Kp = 0.05;   // Proportional gain (tune as needed)
+    const double Ki = 0.01;   // Integral gain (tune as needed)
+    const double Kd = 0.0;    // Derivative gain (tune as needed)
+    const int setpoint = 1500; // Target ADC value (tune as needed)
+    const double DUTY_MIN = 1.0;
+    const double DUTY_MAX = 99.0;
+
     while (1) {
-        // Clamp duty_percent to [0, 100]
+        // Clamp duty_percent to [DUTY_MIN, DUTY_MAX]
         int local_duty = duty_percent;
-        if (local_duty < 0) local_duty = 0;
-        if (local_duty > 100) local_duty = 100;
+        if (local_duty < DUTY_MIN) local_duty = DUTY_MIN;
+        if (local_duty > DUTY_MAX) local_duty = DUTY_MAX;
+
+        // --- PID control for duty_percent ---
+        int adc_value = adc_value_on_capture;
+        if (adc_value >= 0) {
+            double error = setpoint - adc_value;
+            pid_integral += error;
+            double derivative = error - pid_prev_error;
+            double pid_output = Kp * error + Ki * pid_integral + Kd * derivative;
+            pid_prev_error = error;
+            duty_percent += pid_output;
+            if (duty_percent < DUTY_MIN) duty_percent = DUTY_MIN;
+            if (duty_percent > DUTY_MAX) duty_percent = DUTY_MAX;
+        }
+        // --- End PID control ---
 
         uint32_t duty_ticks = period_ticks * local_duty / 100;
         ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(comparator, duty_ticks));
 
         // Small delay to allow current to propagate after high side turns on
-        esp_rom_delay_us(2); // Adjust as needed for your hardware
+       // esp_rom_delay_us(2); // Adjust as needed for your hardware  //delay was added in ADC.c
 
         // Trigger ADC task via semaphore (like before)
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;

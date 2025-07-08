@@ -9,7 +9,8 @@ static const char *TAG = "adc_cali";
 
 extern SemaphoreHandle_t capture_semaphore;
 adc_oneshot_unit_handle_t adc_handle = NULL;
-volatile int adc_value_on_capture = 0;
+volatile int adc_value_on_capture = -1; // Default to -1 to indicate no valid value yet
+// This variable will be set by the ADC task when a new value is captured
 
 #define FILTER_WINDOW 8 // Number of samples for moving average
 
@@ -24,6 +25,7 @@ void adc_on_capture_task(void *pvParameters)
       //  ESP_LOGI(TAG, "ADC task running, waiting for capture_semaphore...");
         if (capture_semaphore && xSemaphoreTake(capture_semaphore, pdMS_TO_TICKS(100)) == pdTRUE) {
             int value = 0;
+            vTaskDelay(pdMS_TO_TICKS(1)); // Lead Edge Blanking delay (non-blocking, adjust as needed)
             esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &value);
            // ESP_LOGI(TAG, "ADC raw read: %d (err=%s)", value, esp_err_to_name(err));
             if (err == ESP_OK) {
@@ -45,7 +47,7 @@ void adc_on_capture_task(void *pvParameters)
                 ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(10)); // Always yield to avoid WDT
+        // Removed vTaskDelay at end of loop
     }
 }
 
