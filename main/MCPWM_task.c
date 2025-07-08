@@ -21,8 +21,20 @@ extern volatile int adc_value_on_capture;
 
 
 
+// Callback for PWM rising edge (GPIO 16)
+static bool IRAM_ATTR pwm_rising_cb(mcpwm_gen_handle_t gen, const mcpwm_gen_event_data_t *edata, void *user_data)
+{
+    // Record the timer value at PWM rising edge
+    last_pwm_rising_ticks = edata->timer_value;
+    return false;
+}
+
 static bool IRAM_ATTR capture_cb(mcpwm_cap_channel_handle_t cap_chan, const mcpwm_capture_event_data_t *edata, void *user_data)
 {
+    // Calculate propagation delay between PWM rising edge and capture event
+    delay_ticks = (edata->cap_value >= last_pwm_rising_ticks) ?
+        (edata->cap_value - last_pwm_rising_ticks) :
+        (0xFFFFFFFF - last_pwm_rising_ticks + edata->cap_value + 1);
     // Only trigger the ADC task (e.g., by giving the semaphore)
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     if (capture_semaphore) {
@@ -86,6 +98,11 @@ void mcpwm_halfbridge_task(void *pvParameters)
     mcpwm_generator_config_t gen_config_b = { .gen_gpio_num = MCPWM_GPIO_PWM0B };
     ESP_ERROR_CHECK(mcpwm_new_generator(oper, &gen_config_a, &gen_a));
     ESP_ERROR_CHECK(mcpwm_new_generator(oper, &gen_config_b, &gen_b));
+
+    // Register PWM rising edge callback for gen_a (GPIO 16)
+    ESP_ERROR_CHECK(mcpwm_generator_register_event_callbacks(gen_a, &(mcpwm_gen_event_callbacks_t){
+        .on_timer_empty = pwm_rising_cb,
+    }, NULL));
 
     mcpwm_dead_time_config_t dt_config = {
         .posedge_delay_ticks = DEAD_TIME_NS / 100,
