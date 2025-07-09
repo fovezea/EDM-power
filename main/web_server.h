@@ -34,6 +34,11 @@ typedef struct {
     bool wifi_connected;         // WiFi connection status
     uint32_t uptime_seconds;     // System uptime
     int adc_blanking_delay;      // ADC lead edge blanking delay in ticks
+    // PID parameters
+    float pid_kp;                // Proportional gain
+    float pid_ki;                // Integral gain
+    float pid_kd;                // Derivative gain
+    int pid_setpoint;            // Target ADC value
 } edm_status_t;
 
 // WebSocket client structure
@@ -58,6 +63,10 @@ void web_server_task(void *pvParameters);
 extern volatile int duty_percent;
 extern volatile int adc_value_on_capture;
 extern volatile int adc_blanking_delay_ticks;
+extern volatile float pid_kp;
+extern volatile float pid_ki;
+extern volatile float pid_kd;
+extern volatile int pid_setpoint;
 extern SemaphoreHandle_t capture_semaphore;
 
 #ifdef __cplusplus

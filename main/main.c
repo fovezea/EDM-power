@@ -19,6 +19,7 @@
 // Web server and WiFi includes
 #include "wifi_connect.h"
 #include "web_server.h"
+#include "settings.h"
 #include "freertos/queue.h"
 #include <string.h>
 
@@ -423,6 +424,27 @@ void stepper_task(void *pvParameters)
 void app_main(void)
 {
     pwm_adc_queue = xQueueCreate(1, sizeof(int));
+    
+    // Initialize settings system
+    esp_err_t settings_ret = settings_init();
+    if (settings_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize settings system");
+    } else {
+        // Load settings and apply to global variables
+        edm_settings_t settings;
+        if (settings_load(&settings) == ESP_OK) {
+            duty_percent = settings.duty_percent;
+            adc_blanking_delay_ticks = settings.adc_blanking_delay;
+            pid_kp = settings.pid_kp;
+            pid_ki = settings.pid_ki;
+            pid_kd = settings.pid_kd;
+            pid_setpoint = settings.pid_setpoint;
+            ESP_LOGI(TAG, "Settings loaded: Duty=%d%%, ADC Delay=%d ticks", 
+                     settings.duty_percent, settings.adc_blanking_delay);
+            ESP_LOGI(TAG, "PID: Kp=%.3f, Ki=%.3f, Kd=%.3f, Setpoint=%d",
+                     settings.pid_kp, settings.pid_ki, settings.pid_kd, settings.pid_setpoint);
+        }
+    }
     
     // Create the main EDM tasks
     xTaskCreate(stepper_task, "stepper_task", 4096, NULL, 5, NULL);

@@ -18,6 +18,12 @@ volatile uint32_t last_capture_ticks = 0;
 volatile uint32_t delay_ticks = 0; // Store the interval between PWM and capture
 SemaphoreHandle_t capture_semaphore = NULL;
 
+// PID control variables - now configurable from web interface
+volatile float pid_kp = 0.05f;   // Proportional gain
+volatile float pid_ki = 0.01f;   // Integral gain
+volatile float pid_kd = 0.0f;    // Derivative gain
+volatile int pid_setpoint = 1500; // Target ADC value
+
 extern volatile int adc_value_on_capture;
 
 // Callback for PWM rising edge (GPIO 16) - using timer event instead of generator event
@@ -143,10 +149,6 @@ void mcpwm_halfbridge_task(void *pvParameters)
     // PID control variables
     static double pid_integral = 0;
     static double pid_prev_error = 0;
-    const double Kp = 0.05;   // Proportional gain (tune as needed)
-    const double Ki = 0.01;   // Integral gain (tune as needed)
-    const double Kd = 0.0;    // Derivative gain (tune as needed)
-    const int setpoint = 1500; // Target ADC value (tune as needed)
     const double DUTY_MIN = 1.0;
     const double DUTY_MAX = 99.0;
 
@@ -159,10 +161,10 @@ void mcpwm_halfbridge_task(void *pvParameters)
         // --- PID control for duty_percent ---
         int adc_value = adc_value_on_capture;
         if (adc_value >= 0) {
-            double error = setpoint - adc_value;
+            double error = pid_setpoint - adc_value;
             pid_integral += error;
             double derivative = error - pid_prev_error;
-            double pid_output = Kp * error + Ki * pid_integral + Kd * derivative;
+            double pid_output = pid_kp * error + pid_ki * pid_integral + pid_kd * derivative;
             pid_prev_error = error;
             duty_percent += pid_output;
             if (duty_percent < DUTY_MIN) duty_percent = DUTY_MIN;

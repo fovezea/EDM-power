@@ -8,6 +8,7 @@
 #include "esp_system.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
+#include "settings.h"
 #include <string.h>
 #include "lwip/sockets.h"
 
@@ -78,6 +79,19 @@ static const char *html_page =
 "            </div>\n"
 "            \n"
 "            <div class=\"status-card\">\n"
+"                <h3>PID Control</h3>\n"
+"                <div>Kp: <span id=\"pid-kp\" class=\"value-display\">0.050</span></div>\n"
+"                <input type=\"range\" min=\"0\" max=\"1\" step=\"0.001\" value=\"0.050\" class=\"slider\" id=\"pid-kp-slider\">\n"
+"                <div>Ki: <span id=\"pid-ki\" class=\"value-display\">0.010</span></div>\n"
+"                <input type=\"range\" min=\"0\" max=\"1\" step=\"0.001\" value=\"0.010\" class=\"slider\" id=\"pid-ki-slider\">\n"
+"                <div>Kd: <span id=\"pid-kd\" class=\"value-display\">0.000</span></div>\n"
+"                <input type=\"range\" min=\"0\" max=\"1\" step=\"0.001\" value=\"0.000\" class=\"slider\" id=\"pid-kd-slider\">\n"
+"                <div>Setpoint: <span id=\"pid-setpoint\" class=\"value-display\">1500</span></div>\n"
+"                <input type=\"range\" min=\"0\" max=\"4095\" step=\"1\" value=\"1500\" class=\"slider\" id=\"pid-setpoint-slider\">\n"
+"                <button class=\"button\" onclick=\"setPID()\">Set PID</button>\n"
+"            </div>\n"
+"            \n"
+"            <div class=\"status-card\">\n"
 "                <h3>System Status</h3>\n"
 "                <div>Cutting: <span id=\"cutting-status\" class=\"value-display\">Stopped</span></div>\n"
 "                <div>Limit Switch: <span id=\"limit-status\" class=\"value-display\">OK</span></div>\n"
@@ -99,6 +113,7 @@ static const char *html_page =
 "            <button class=\"button\" onclick=\"jogUp()\">Jog Up</button>\n"
 "            <button class=\"button\" onclick=\"jogDown()\">Jog Down</button>\n"
 "            <button class=\"button\" onclick=\"homePosition()\">Home Position</button>\n"
+"            <button class=\"button danger\" onclick=\"resetSettings()\">Reset Settings</button>\n"
 "        </div>\n"
 "    </div>\n"
 "\n"
@@ -141,6 +156,10 @@ static const char *html_page =
 "            document.getElementById('cut-speed').textContent = data.cut_speed.toFixed(2) + ' mm/s';\n"
 "            document.getElementById('step-position').textContent = data.step_position + ' steps';\n"
 "            document.getElementById('blanking-delay').textContent = data.adc_blanking_delay + ' ticks';\n"
+"            document.getElementById('pid-kp').textContent = data.pid_kp.toFixed(3);\n"
+"            document.getElementById('pid-ki').textContent = data.pid_ki.toFixed(3);\n"
+"            document.getElementById('pid-kd').textContent = data.pid_kd.toFixed(3);\n"
+"            document.getElementById('pid-setpoint').textContent = data.pid_setpoint;\n"
 "        }\n"
 "\n"
 "        function sendCommand(command, value) {\n"
@@ -159,6 +178,18 @@ static const char *html_page =
 "        function setBlankingDelay() {\n"
 "            var delay = document.getElementById('blanking-delay-slider').value;\n"
 "            sendCommand('set_blanking_delay', parseInt(delay));\n"
+"        }\n"
+"\n"
+"        function setPID() {\n"
+"            var kp = document.getElementById('pid-kp-slider').value;\n"
+"            var ki = document.getElementById('pid-ki-slider').value;\n"
+"            var kd = document.getElementById('pid-kd-slider').value;\n"
+"            var setpoint = document.getElementById('pid-setpoint-slider').value;\n"
+"            \n"
+"            sendCommand('set_pid_kp', parseFloat(kp));\n"
+"            sendCommand('set_pid_ki', parseFloat(ki));\n"
+"            sendCommand('set_pid_kd', parseFloat(kd));\n"
+"            sendCommand('set_pid_setpoint', parseInt(setpoint));\n"
 "        }\n"
 "\n"
 "        function startCut() {\n"
@@ -181,6 +212,12 @@ static const char *html_page =
 "            sendCommand('home_position');\n"
 "        }\n"
 "\n"
+"        function resetSettings() {\n"
+"            if (confirm('Are you sure you want to reset all settings to defaults?')) {\n"
+"                sendCommand('reset_settings');\n"
+"            }\n"
+"        }\n"
+"\n"
 "        connectWebSocket();\n"
 "        \n"
 "        document.getElementById('duty-slider').addEventListener('input', function() {\n"
@@ -189,6 +226,22 @@ static const char *html_page =
 "        \n"
 "        document.getElementById('blanking-delay-slider').addEventListener('input', function() {\n"
 "            document.getElementById('blanking-delay').textContent = this.value + ' ticks';\n"
+"        });\n"
+"        \n"
+"        document.getElementById('pid-kp-slider').addEventListener('input', function() {\n"
+"            document.getElementById('pid-kp').textContent = parseFloat(this.value).toFixed(3);\n"
+"        });\n"
+"        \n"
+"        document.getElementById('pid-ki-slider').addEventListener('input', function() {\n"
+"            document.getElementById('pid-ki').textContent = parseFloat(this.value).toFixed(3);\n"
+"        });\n"
+"        \n"
+"        document.getElementById('pid-kd-slider').addEventListener('input', function() {\n"
+"            document.getElementById('pid-kd').textContent = parseFloat(this.value).toFixed(3);\n"
+"        });\n"
+"        \n"
+"        document.getElementById('pid-setpoint-slider').addEventListener('input', function() {\n"
+"            document.getElementById('pid-setpoint').textContent = this.value;\n"
 "        });\n"
 "    </script>\n"
 "</body>\n"
@@ -267,8 +320,10 @@ static esp_err_t websocket_handler(httpd_req_t *req) {
 }
 
 // Command processing - now sends commands to main task via queue
-static void process_command(const char *command, const char *value) {
+__attribute__((used)) static void process_command(const char *command, const char *value) {
     ESP_LOGI(TAG, "Received command: %s, value: %s", command, value ? value : "null");
+    
+    static edm_settings_t current_settings;
     
     // For now, we'll handle duty cycle directly here since it's a simple variable
     if (strcmp(command, "set_duty") == 0 && value) {
@@ -276,6 +331,12 @@ static void process_command(const char *command, const char *value) {
         if (duty >= 1 && duty <= 99) {
             duty_percent = duty;
             ESP_LOGI(TAG, "Duty cycle set to %d%%", duty);
+            
+            // Save to settings
+            if (settings_load(&current_settings) == ESP_OK) {
+                current_settings.duty_percent = duty;
+                settings_save(&current_settings);
+            }
         }
     }
     // Handle ADC blanking delay setting
@@ -284,6 +345,81 @@ static void process_command(const char *command, const char *value) {
         if (delay >= 1 && delay <= 200) { // Limit to reasonable range
             adc_blanking_delay_ticks = delay;
             ESP_LOGI(TAG, "ADC blanking delay set to %d ticks", delay);
+            
+            // Save to settings
+            if (settings_load(&current_settings) == ESP_OK) {
+                current_settings.adc_blanking_delay = delay;
+                settings_save(&current_settings);
+            }
+        }
+    }
+    // Handle PID parameter settings
+    else if (strcmp(command, "set_pid_kp") == 0 && value) {
+        float kp = atof(value);
+        if (kp >= 0.0f && kp <= 10.0f) {
+            pid_kp = kp;
+            ESP_LOGI(TAG, "PID Kp set to %.3f", kp);
+            
+            // Save to settings
+            if (settings_load(&current_settings) == ESP_OK) {
+                current_settings.pid_kp = kp;
+                settings_save(&current_settings);
+            }
+        }
+    }
+    else if (strcmp(command, "set_pid_ki") == 0 && value) {
+        float ki = atof(value);
+        if (ki >= 0.0f && ki <= 10.0f) {
+            pid_ki = ki;
+            ESP_LOGI(TAG, "PID Ki set to %.3f", ki);
+            
+            // Save to settings
+            if (settings_load(&current_settings) == ESP_OK) {
+                current_settings.pid_ki = ki;
+                settings_save(&current_settings);
+            }
+        }
+    }
+    else if (strcmp(command, "set_pid_kd") == 0 && value) {
+        float kd = atof(value);
+        if (kd >= 0.0f && kd <= 10.0f) {
+            pid_kd = kd;
+            ESP_LOGI(TAG, "PID Kd set to %.3f", kd);
+            
+            // Save to settings
+            if (settings_load(&current_settings) == ESP_OK) {
+                current_settings.pid_kd = kd;
+                settings_save(&current_settings);
+            }
+        }
+    }
+    else if (strcmp(command, "set_pid_setpoint") == 0 && value) {
+        int setpoint = atoi(value);
+        if (setpoint >= 0 && setpoint <= 4095) {
+            pid_setpoint = setpoint;
+            ESP_LOGI(TAG, "PID setpoint set to %d", setpoint);
+            
+            // Save to settings
+            if (settings_load(&current_settings) == ESP_OK) {
+                current_settings.pid_setpoint = setpoint;
+                settings_save(&current_settings);
+            }
+        }
+    }
+    // Handle settings reset
+    else if (strcmp(command, "reset_settings") == 0) {
+        ESP_LOGI(TAG, "Resetting settings to defaults");
+        if (settings_reset_to_defaults() == ESP_OK) {
+            // Reload settings and update variables
+            if (settings_load(&current_settings) == ESP_OK) {
+                duty_percent = current_settings.duty_percent;
+                adc_blanking_delay_ticks = current_settings.adc_blanking_delay;
+                pid_kp = current_settings.pid_kp;
+                pid_ki = current_settings.pid_ki;
+                pid_kd = current_settings.pid_kd;
+                pid_setpoint = current_settings.pid_setpoint;
+                ESP_LOGI(TAG, "Settings reset and reloaded");
+            }
         }
     }
     // Other commands will be handled by the main task through the queue system
@@ -305,6 +441,10 @@ esp_err_t websocket_send_status(edm_status_t *status) {
     cJSON_AddBoolToObject(json, "wifi_connected", status->wifi_connected);
     cJSON_AddNumberToObject(json, "uptime_seconds", status->uptime_seconds);
     cJSON_AddNumberToObject(json, "adc_blanking_delay", status->adc_blanking_delay);
+    cJSON_AddNumberToObject(json, "pid_kp", status->pid_kp);
+    cJSON_AddNumberToObject(json, "pid_ki", status->pid_ki);
+    cJSON_AddNumberToObject(json, "pid_kd", status->pid_kd);
+    cJSON_AddNumberToObject(json, "pid_setpoint", status->pid_setpoint);
     
     char *json_str = cJSON_Print(json);
     if (json_str) {
@@ -392,6 +532,10 @@ void web_server_task(void *pvParameters) {
         status.wifi_connected = wifi_is_connected();
         status.uptime_seconds = (esp_timer_get_time() / 1000000) - system_start_time;
         status.adc_blanking_delay = adc_blanking_delay_ticks;
+        status.pid_kp = pid_kp;
+        status.pid_ki = pid_ki;
+        status.pid_kd = pid_kd;
+        status.pid_setpoint = pid_setpoint;
         
         web_server_update_status(&status);
         
