@@ -17,8 +17,8 @@ extern "C" {
 #endif
 
 // WiFi configuration
-#define WIFI_SSID "YOUR_WIFI_SSID"
-#define WIFI_PASS "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID "403"  // Replace with your WiFi SSID
+#define WIFI_PASS "12345678"  // Replace with your WiFi password  
 #define WIFI_MAXIMUM_RETRY 5
 
 // Event group to signal when we are connected

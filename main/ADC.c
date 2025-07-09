@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_adc/adc_oneshot.h"
+#include "esp_task_wdt.h"
 
 static const char *TAG = "adc_cali";
 
@@ -12,8 +13,11 @@ adc_oneshot_unit_handle_t adc_handle = NULL;
 volatile int adc_value_on_capture = -1; // Default to -1 to indicate no valid value yet
 // This variable will be set by the ADC task when a new value is captured
 
-// Configurable lead edge blanking delay (minimum 1 tick)
-volatile int adc_blanking_delay_ticks = 1; // Default to 1 tick
+// Flag to prevent ADC task from overwriting manually set values
+volatile bool adc_manual_override = false;
+
+// Configurable lead edge blanking delay (minimum 10 ticks)
+volatile int adc_blanking_delay_ticks = 10; // Default to 10 ticks
 
 #define FILTER_WINDOW 8 // Number of samples for moving average
 
@@ -24,9 +28,18 @@ void adc_on_capture_task(void *pvParameters)
     int buffer_index = 0;
     int last_valid = 0;
     const int MAX_JUMP = 200; // Max allowed jump between samples
+    
+    ESP_LOGI(TAG, "ADC capture task started");
+    
+    // Try to disable watchdog for this task
+    esp_task_wdt_delete(NULL);
+    
     while (1) {
-      //  ESP_LOGI(TAG, "ADC task running, waiting for capture_semaphore...");
-        if (capture_semaphore && xSemaphoreTake(capture_semaphore, pdMS_TO_TICKS(100)) == pdTRUE) {
+        // Always yield control at the start of each loop
+        vTaskDelay(pdMS_TO_TICKS(10));
+        
+        // Check for semaphore with short timeout
+        if (capture_semaphore && xSemaphoreTake(capture_semaphore, pdMS_TO_TICKS(5)) == pdTRUE) {
             int value = 0;
             vTaskDelay(pdMS_TO_TICKS(adc_blanking_delay_ticks)); // Configurable Lead Edge Blanking delay
             esp_err_t err = adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &value);
@@ -43,14 +56,17 @@ void adc_on_capture_task(void *pvParameters)
                 int sum = 0;
                 for (int i = 0; i < FILTER_WINDOW; ++i) sum += adc_buffer[i];
                 int avg = sum / FILTER_WINDOW;
-                adc_value_on_capture = avg;
+                
+                // Only update if not in manual override mode
+                if (!adc_manual_override) {
+                    adc_value_on_capture = avg;
+                }
                 last_valid = value;
                 // ESP_LOGI(TAG, "ADC value (filtered avg): %d", adc_value_on_capture);
             } else {
                 ESP_LOGE(TAG, "ADC read failed: %s", esp_err_to_name(err));
             }
         }
-        // Removed vTaskDelay at end of loop
     }
 }
 

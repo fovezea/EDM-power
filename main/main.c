@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "stepper_motor_encoder.h"
 #include "freertos/semphr.h"
+#include "nvs_flash.h"
 
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -171,7 +172,7 @@ void stepper_task(void *pvParameters)
  
     ////////////////////////
     // Configure EN + DIR as outputs
-    ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
+    // ESP_LOGI(TAG, "Initialize EN + DIR GPIO");
     gpio_config_t en_dir_gpio_config = {
         .mode = GPIO_MODE_OUTPUT,
         .intr_type = GPIO_INTR_DISABLE,
@@ -180,7 +181,7 @@ void stepper_task(void *pvParameters)
     ESP_ERROR_CHECK(gpio_config(&en_dir_gpio_config));
 
     // Configure jog and limit GPIOs
-    ESP_LOGI(TAG, "Initialize jog and limit GPIOs");
+    // ESP_LOGI(TAG, "Initialize jog and limit GPIOs");
     gpio_config_t jog_gpio_config = {
         .mode = GPIO_MODE_INPUT,
         .intr_type = GPIO_INTR_DISABLE,
@@ -201,14 +202,14 @@ void stepper_task(void *pvParameters)
 
     //calculate stepper frequency from mm/s
     double jog_freq_hz = stepper_calc_freq_from_speed(jog_speed_mm_per_s, steps_per_rev, leadscrew_pitch_mm);
-    ESP_LOGI(TAG, "Calculated stepper jog frequency: %.2f Hz", jog_freq_hz);
+    // ESP_LOGI(TAG, "Calculated stepper jog frequency: %.2f Hz", jog_freq_hz);
     //calculate cut frequency from mm/s
     double cut_freq_hz = stepper_calc_freq_from_speed(cut_speed_mm_per_s, steps_per_rev, leadscrew_pitch_mm);
-    ESP_LOGI(TAG, "Calculated stepper cut frequency: %.2f Hz", cut_freq_hz);
+    // ESP_LOGI(TAG, "Calculated stepper cut frequency: %.2f Hz", cut_freq_hz);
 
 
     // Create RMT TX channel
-    ESP_LOGI(TAG, "Create RMT TX channel");
+    // ESP_LOGI(TAG, "Create RMT TX channel");
     //rmt_channel_handle_t motor_chan = NULL;
     rmt_tx_channel_config_t tx_chan_config = {
         .clk_src = RMT_CLK_SRC_DEFAULT, // select clock source
@@ -219,12 +220,12 @@ void stepper_task(void *pvParameters)
     };
     ESP_ERROR_CHECK(rmt_new_tx_channel(&tx_chan_config, &motor_chan));
 
-    ESP_LOGI(TAG, "Set spin direction");
+    // ESP_LOGI(TAG, "Set spin direction");
     gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
-    ESP_LOGI(TAG, "Enable step motor");
+    // ESP_LOGI(TAG, "Enable step motor");
     gpio_set_level(STEP_MOTOR_GPIO_EN, STEP_MOTOR_ENABLE_LEVEL);
 
-    ESP_LOGI(TAG, "Create motor encoders");
+    // ESP_LOGI(TAG, "Create motor encoders");
     stepper_motor_curve_encoder_config_t accel_encoder_config = {0};
     accel_encoder_config.resolution = STEP_MOTOR_RESOLUTION_HZ;
     accel_encoder_config.sample_points = 1000;
@@ -268,9 +269,9 @@ void stepper_task(void *pvParameters)
         return;
     }
 
-    ESP_LOGI(TAG, "Enable RMT channel");
+    // ESP_LOGI(TAG, "Enable RMT channel");
     // Debug: print motor_chan handle before enabling
-    ESP_LOGI(TAG, "motor_chan handle: %p", motor_chan);
+    // ESP_LOGI(TAG, "motor_chan handle: %p", motor_chan);
     esp_err_t err = rmt_enable(motor_chan);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to enable RMT channel: %s", esp_err_to_name(err));
@@ -295,12 +296,12 @@ void stepper_task(void *pvParameters)
         
         // Check for web interface commands
         if (get_jog_up_requested()) {
-            ESP_LOGI(TAG, "Executing jog up from web interface");
+            // ESP_LOGI(TAG, "Executing jog up from web interface");
             jog_up = 1; // Simulate button press
         }
         
         if (get_jog_down_requested()) {
-            ESP_LOGI(TAG, "Executing jog down from web interface");
+            // ESP_LOGI(TAG, "Executing jog down from web interface");
             jog_down = 1; // Simulate button press
         }
         
@@ -312,7 +313,7 @@ void stepper_task(void *pvParameters)
       
         // If limit switch is OFF, inhibit all movement
         if (!limit_switch) {
-            ESP_LOGI(TAG, "Limit switch hit, stopping all movement");
+            // ESP_LOGI(TAG, "Limit switch hit, stopping all movement");
             // Stop the encoder if running
             if (encoder_running) {
                 rmt_disable(motor_chan);
@@ -325,11 +326,11 @@ void stepper_task(void *pvParameters)
 
              // if limit switch is OFF, inhibit Jog UP for now
         if (jog_up) {
-            ESP_LOGI(TAG, "Jog UP pressed");
+            // ESP_LOGI(TAG, "Jog UP pressed");
             jogging = 1;
             gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE); // Retract direction
             uint32_t steps = 1; // Large burst for smooth jog
-            ESP_LOGI(TAG, "Jog UP: accel phase");
+            // ESP_LOGI(TAG, "Jog UP: accel phase");
             ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), &tx_config));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             encoder_running = true;
@@ -342,17 +343,17 @@ void stepper_task(void *pvParameters)
                 ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
                 // No artificial delay for smoothest motion
             }
-            ESP_LOGI(TAG, "Jog UP: decel phase");
+            // ESP_LOGI(TAG, "Jog UP: decel phase");
             steps = 1;
             ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), &tx_config));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             jogging = 0;
         } else if (jog_down) {
-            ESP_LOGI(TAG, "Jog DOWN pressed");
+            // ESP_LOGI(TAG, "Jog DOWN pressed");
             jogging = -1;
             gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
             uint32_t steps = 1; // Large burst for smooth jog
-            ESP_LOGI(TAG, "Jog DOWN: accel phase");
+            // ESP_LOGI(TAG, "Jog DOWN: accel phase");
             ESP_ERROR_CHECK(rmt_transmit(motor_chan, accel_motor_encoder, &steps, sizeof(steps), &tx_config));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             encoder_running = true;
@@ -364,28 +365,28 @@ void stepper_task(void *pvParameters)
                 ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
                 // No artificial delay for smoothest motion
             }
-            ESP_LOGI(TAG, "Jog DOWN: decel phase");
+            // ESP_LOGI(TAG, "Jog DOWN: decel phase");
             steps = 1;
             ESP_ERROR_CHECK(rmt_transmit(motor_chan, decel_motor_encoder, &steps, sizeof(steps), &tx_config));
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             encoder_running = true;
             jogging = 0;
         } else if (!jogging && limit_switch && start_cut) {
-            ESP_LOGI(TAG, "Start EDM cut");
+            // ESP_LOGI(TAG, "Start EDM cut");
             // int delay_ticks = 0; // Removed: delay_ticks no longer used
             int gap_voltage = adc_value_on_capture;
-            ESP_LOGI(TAG, "DEBUG: gap_voltage=%d", gap_voltage); // Debug print
+            // ESP_LOGI(TAG, "DEBUG: gap_voltage=%d", gap_voltage); // Debug print
             // Control logic
             int step_direction = 0;
             if (gap_voltage < LOW_VOLTAGE) {
                 step_direction = -1;
-                 ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
+                 // ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
             } else if (gap_voltage > HIGH_VOLTAGE) {
                 step_direction = 1;
-                 ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
+                 // ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
             } else {
                 step_direction = 0;
-                 ESP_LOGI(TAG, "EDM: Gap OK, holding position");
+                 // ESP_LOGI(TAG, "EDM: Gap OK, holding position");
             }
             // Move stepper based on step_direction
             if (step_direction == -1) {
@@ -425,6 +426,15 @@ void app_main(void)
 {
     pwm_adc_queue = xQueueCreate(1, sizeof(int));
     
+    // Initialize NVS
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "NVS initialized successfully");
+    
     // Initialize settings system
     esp_err_t settings_ret = settings_init();
     if (settings_ret != ESP_OK) {
@@ -439,10 +449,12 @@ void app_main(void)
             pid_ki = settings.pid_ki;
             pid_kd = settings.pid_kd;
             pid_setpoint = settings.pid_setpoint;
+            pid_control_enabled = settings.pid_control_enabled;
             ESP_LOGI(TAG, "Settings loaded: Duty=%d%%, ADC Delay=%d ticks", 
                      settings.duty_percent, settings.adc_blanking_delay);
-            ESP_LOGI(TAG, "PID: Kp=%.3f, Ki=%.3f, Kd=%.3f, Setpoint=%d",
-                     settings.pid_kp, settings.pid_ki, settings.pid_kd, settings.pid_setpoint);
+            ESP_LOGI(TAG, "PID: Kp=%.3f, Ki=%.3f, Kd=%.3f, Setpoint=%d, Enabled=%s",
+                     settings.pid_kp, settings.pid_ki, settings.pid_kd, settings.pid_setpoint,
+                     settings.pid_control_enabled ? "true" : "false");
         }
     }
     
@@ -451,7 +463,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Stepper motor example started");
 
     adc_oneshot_init(); // Initialize ADC before starting ADC task
-    xTaskCreate(adc_on_capture_task, "adc_on_capture_task", 2048, NULL, 10, NULL); // High priority for fast ADC
+    xTaskCreate(adc_on_capture_task, "adc_on_capture_task", 4096, NULL, 1, NULL); // Very low priority to prevent watchdog timeout
 
     // Start MCPWM task for power train
     xTaskCreate(mcpwm_halfbridge_task, "mcpwm_halfbridge_task", 4096, NULL, 5, NULL);

@@ -67,6 +67,7 @@ extern volatile float pid_kp;
 extern volatile float pid_ki;
 extern volatile float pid_kd;
 extern volatile int pid_setpoint;
+extern volatile bool pid_control_enabled;
 extern SemaphoreHandle_t capture_semaphore;
 
 #ifdef __cplusplus

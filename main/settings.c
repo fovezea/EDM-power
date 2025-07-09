@@ -40,6 +40,7 @@ esp_err_t settings_load(edm_settings_t *settings) {
         settings->pid_ki = DEFAULT_PID_KI;
         settings->pid_kd = DEFAULT_PID_KD;
         settings->pid_setpoint = DEFAULT_PID_SETPOINT;
+        settings->pid_control_enabled = DEFAULT_PID_CONTROL_ENABLED;
         
         // Save defaults
         settings_save(settings);
@@ -53,8 +54,9 @@ esp_err_t settings_load(edm_settings_t *settings) {
     ESP_LOGI(TAG, "Duty: %d%%, ADC Delay: %d ticks, Jog: %.1f mm/s, Cut: %.2f mm/s",
              settings->duty_percent, settings->adc_blanking_delay, 
              settings->jog_speed, settings->cut_speed);
-    ESP_LOGI(TAG, "PID: Kp=%.3f, Ki=%.3f, Kd=%.3f, Setpoint=%d",
-             settings->pid_kp, settings->pid_ki, settings->pid_kd, settings->pid_setpoint);
+    ESP_LOGI(TAG, "PID: Kp=%.3f, Ki=%.3f, Kd=%.3f, Setpoint=%d, Enabled=%s",
+             settings->pid_kp, settings->pid_ki, settings->pid_kd, settings->pid_setpoint,
+             settings->pid_control_enabled ? "true" : "false");
     
     return ESP_OK;
 }
@@ -80,8 +82,9 @@ esp_err_t settings_save(const edm_settings_t *settings) {
     ESP_LOGI(TAG, "Duty: %d%%, ADC Delay: %d ticks, Jog: %.1f mm/s, Cut: %.2f mm/s",
              settings->duty_percent, settings->adc_blanking_delay, 
              settings->jog_speed, settings->cut_speed);
-    ESP_LOGI(TAG, "PID: Kp=%.3f, Ki=%.3f, Kd=%.3f, Setpoint=%d",
-             settings->pid_kp, settings->pid_ki, settings->pid_kd, settings->pid_setpoint);
+    ESP_LOGI(TAG, "PID: Kp=%.3f, Ki=%.3f, Kd=%.3f, Setpoint=%d, Enabled=%s",
+             settings->pid_kp, settings->pid_ki, settings->pid_kd, settings->pid_setpoint,
+             settings->pid_control_enabled ? "true" : "false");
     
     return ESP_OK;
 }
@@ -95,7 +98,8 @@ esp_err_t settings_reset_to_defaults(void) {
         .pid_kp = DEFAULT_PID_KP,
         .pid_ki = DEFAULT_PID_KI,
         .pid_kd = DEFAULT_PID_KD,
-        .pid_setpoint = DEFAULT_PID_SETPOINT
+        .pid_setpoint = DEFAULT_PID_SETPOINT,
+        .pid_control_enabled = DEFAULT_PID_CONTROL_ENABLED
     };
     
     esp_err_t ret = settings_save(&default_settings);

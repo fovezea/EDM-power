@@ -63,6 +63,7 @@ static const char *html_page =
 "                <div class=\"value-display\" id=\"duty-percent\">0%</div>\n"
 "                <input type=\"range\" min=\"1\" max=\"99\" value=\"40\" class=\"slider\" id=\"duty-slider\">\n"
 "                <button class=\"button\" onclick=\"setDuty()\">Set Duty</button>\n"
+"                <button class=\"button\" id=\"pid-toggle-btn\" onclick=\"togglePID()\">Enable PID</button>\n"
 "            </div>\n"
 "            \n"
 "            <div class=\"status-card\">\n"
@@ -73,8 +74,8 @@ static const char *html_page =
 "            \n"
 "            <div class=\"status-card\">\n"
 "                <h3>ADC Blanking Delay</h3>\n"
-"                <div class=\"value-display\" id=\"blanking-delay\">1 ticks</div>\n"
-"                <input type=\"range\" min=\"1\" max=\"200\" value=\"1\" class=\"slider\" id=\"blanking-delay-slider\">\n"
+"                <div class=\"value-display\" id=\"blanking-delay\">10 ticks</div>\n"
+"                <input type=\"range\" min=\"10\" max=\"200\" value=\"10\" class=\"slider\" id=\"blanking-delay-slider\">\n"
 "                <button class=\"button\" onclick=\"setBlankingDelay()\">Set Delay</button>\n"
 "            </div>\n"
 "            \n"
@@ -114,39 +115,84 @@ static const char *html_page =
 "            <button class=\"button\" onclick=\"jogDown()\">Jog Down</button>\n"
 "            <button class=\"button\" onclick=\"homePosition()\">Home Position</button>\n"
 "            <button class=\"button danger\" onclick=\"resetSettings()\">Reset Settings</button>\n"
+"            <button class=\"button\" onclick=\"checkPIDState()\">Check PID State</button>\n"
+"            <button class=\"button\" onclick=\"debugSetDuty50()\">Set Duty to 50%</button>\n"
+"            <button class=\"button\" onclick=\"debugSetAdc2000()\">Set ADC to 2000</button>\n"
+"            <button class=\"button\" onclick=\"debugDisableAdcOverride()\">Disable ADC Override</button>\n"
+"            <button class=\"button\" onclick=\"debugAllValues()\">Debug All Values</button>\n"
 "        </div>\n"
 "    </div>\n"
 "\n"
 "    <script>\n"
-"        var ws = null;\n"
-"        var reconnectTimer = null;\n"
+"        console.log('JavaScript starting...');\n"
+"        var updateTimer = null;\n"
+"        var isConnected = false;\n"
+"        var sliderActive = {\n"
+"            duty: false,\n"
+"            blanking: false,\n"
+"            kp: false,\n"
+"            ki: false,\n"
+"            kd: false,\n"
+"            setpoint: false\n"
+"        };\n"
+"        var lastUserValues = {\n"
+"            duty: null,\n"
+"            blanking: null,\n"
+"            kp: null,\n"
+"            ki: null,\n"
+"            kd: null,\n"
+"            setpoint: null\n"
+"        };\n"
 "\n"
-"        function connectWebSocket() {\n"
-"            var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';\n"
-"            var wsUrl = protocol + '//' + window.location.host + '/ws';\n"
-"            \n"
-"            ws = new WebSocket(wsUrl);\n"
-"            \n"
-"            ws.onopen = function() {\n"
-"                document.getElementById('status-text').textContent = 'Connected';\n"
-"                document.getElementById('connection-status').className = 'connection-status connected';\n"
-"            };\n"
-"            \n"
-"            ws.onmessage = function(event) {\n"
-"                var data = JSON.parse(event.data);\n"
-"                updateDisplay(data);\n"
-"            };\n"
-"            \n"
-"            ws.onclose = function() {\n"
-"                document.getElementById('status-text').textContent = 'Disconnected';\n"
-"                document.getElementById('connection-status').className = 'connection-status disconnected';\n"
-"                if (reconnectTimer) clearTimeout(reconnectTimer);\n"
-"                reconnectTimer = setTimeout(connectWebSocket, 2000);\n"
-"            };\n"
+"        function startPolling() {\n"
+"            console.log('Starting polling updates');\n"
+"            updateStatus();\n"
+"            updateTimer = setInterval(updateStatus, 1000); // Update every second\n"
+"        }\n"
+"\n"
+"        function stopPolling() {\n"
+"            if (updateTimer) {\n"
+"                clearInterval(updateTimer);\n"
+"                updateTimer = null;\n"
+"            }\n"
+"            isConnected = false;\n"
+"            document.getElementById('status-text').textContent = 'Disconnected';\n"
+"            document.getElementById('connection-status').className = 'connection-status disconnected';\n"
+"        }\n"
+"\n"
+"        function updateStatus() {\n"
+"            fetch('/status')\n"
+"                .then(response => response.json())\n"
+"                .then(data => {\n"
+"                    console.log('Received status update:', data);\n"
+"                    updateDisplay(data);\n"
+"                    if (!isConnected) {\n"
+"                        isConnected = true;\n"
+"                        document.getElementById('status-text').textContent = 'Connected (Polling)';\n"
+"                        document.getElementById('connection-status').className = 'connection-status connected';\n"
+"                    }\n"
+"                })\n"
+"                .catch(error => {\n"
+"                    console.error('Status update failed:', error);\n"
+"                    stopPolling();\n"
+"                    // Retry after 2 seconds\n"
+"                    setTimeout(startPolling, 2000);\n"
+"                });\n"
 "        }\n"
 "\n"
 "        function updateDisplay(data) {\n"
-"            document.getElementById('duty-percent').textContent = data.duty_percent.toFixed(1) + '%';\n"
+"            console.log('Status update received:', data);\n"
+"            \n"
+"            // Only update duty cycle display if slider is not being actively used and user hasn't set a value\n"
+"            if (!sliderActive.duty && lastUserValues.duty === null) {\n"
+"                document.getElementById('duty-percent').textContent = data.duty_percent.toFixed(1) + '%';\n"
+"                document.getElementById('duty-slider').value = data.duty_percent;\n"
+"            } else if (lastUserValues.duty !== null) {\n"
+"                // User has set a value, keep it\n"
+"                document.getElementById('duty-percent').textContent = lastUserValues.duty.toFixed(1) + '%';\n"
+"                document.getElementById('duty-slider').value = lastUserValues.duty;\n"
+"            }\n"
+"            \n"
 "            document.getElementById('gap-voltage').textContent = data.gap_voltage.toFixed(1) + ' mV';\n"
 "            document.getElementById('adc-value').textContent = data.adc_value;\n"
 "            document.getElementById('cutting-status').textContent = data.is_cutting ? 'Running' : 'Stopped';\n"
@@ -155,29 +201,97 @@ static const char *html_page =
 "            document.getElementById('jog-speed').textContent = data.jog_speed.toFixed(1) + ' mm/s';\n"
 "            document.getElementById('cut-speed').textContent = data.cut_speed.toFixed(2) + ' mm/s';\n"
 "            document.getElementById('step-position').textContent = data.step_position + ' steps';\n"
-"            document.getElementById('blanking-delay').textContent = data.adc_blanking_delay + ' ticks';\n"
-"            document.getElementById('pid-kp').textContent = data.pid_kp.toFixed(3);\n"
-"            document.getElementById('pid-ki').textContent = data.pid_ki.toFixed(3);\n"
-"            document.getElementById('pid-kd').textContent = data.pid_kd.toFixed(3);\n"
-"            document.getElementById('pid-setpoint').textContent = data.pid_setpoint;\n"
+"            \n"
+"            // Only update blanking delay display if slider is not being actively used and user hasn't set a value\n"
+"            if (!sliderActive.blanking && lastUserValues.blanking === null) {\n"
+"                document.getElementById('blanking-delay').textContent = data.adc_blanking_delay + ' ticks';\n"
+"                document.getElementById('blanking-delay-slider').value = data.adc_blanking_delay;\n"
+"            } else if (lastUserValues.blanking !== null) {\n"
+"                // User has set a value, keep it\n"
+"                document.getElementById('blanking-delay').textContent = lastUserValues.blanking + ' ticks';\n"
+"                document.getElementById('blanking-delay-slider').value = lastUserValues.blanking;\n"
+"            }\n"
+"            \n"
+"            // Only update PID displays if sliders are not being actively used and user hasn't set a value\n"
+"            if (!sliderActive.kp && lastUserValues.kp === null) {\n"
+"                document.getElementById('pid-kp').textContent = data.pid_kp.toFixed(3);\n"
+"                document.getElementById('pid-kp-slider').value = data.pid_kp;\n"
+"            } else if (lastUserValues.kp !== null) {\n"
+"                // User has set a value, keep it\n"
+"                document.getElementById('pid-kp').textContent = lastUserValues.kp.toFixed(3);\n"
+"                document.getElementById('pid-kp-slider').value = lastUserValues.kp;\n"
+"            }\n"
+"            \n"
+"            if (!sliderActive.ki && lastUserValues.ki === null) {\n"
+"                document.getElementById('pid-ki').textContent = data.pid_ki.toFixed(3);\n"
+"                document.getElementById('pid-ki-slider').value = data.pid_ki;\n"
+"            } else if (lastUserValues.ki !== null) {\n"
+"                // User has set a value, keep it\n"
+"                document.getElementById('pid-ki').textContent = lastUserValues.ki.toFixed(3);\n"
+"                document.getElementById('pid-ki-slider').value = lastUserValues.ki;\n"
+"            }\n"
+"            \n"
+"            if (!sliderActive.kd && lastUserValues.kd === null) {\n"
+"                document.getElementById('pid-kd').textContent = data.pid_kd.toFixed(3);\n"
+"                document.getElementById('pid-kd-slider').value = data.pid_kd;\n"
+"            } else if (lastUserValues.kd !== null) {\n"
+"                // User has set a value, keep it\n"
+"                document.getElementById('pid-kd').textContent = lastUserValues.kd.toFixed(3);\n"
+"                document.getElementById('pid-kd-slider').value = lastUserValues.kd;\n"
+"            }\n"
+"            \n"
+"            if (!sliderActive.setpoint && lastUserValues.setpoint === null) {\n"
+"                document.getElementById('pid-setpoint').textContent = data.pid_setpoint;\n"
+"                document.getElementById('pid-setpoint-slider').value = data.pid_setpoint;\n"
+"            } else if (lastUserValues.setpoint !== null) {\n"
+"                // User has set a value, keep it\n"
+"                document.getElementById('pid-setpoint').textContent = lastUserValues.setpoint;\n"
+"                document.getElementById('pid-setpoint-slider').value = lastUserValues.setpoint;\n"
+"            }\n"
+"            \n"
+"            // Update PID toggle button text\n"
+"            var pidBtn = document.getElementById('pid-toggle-btn');\n"
+"            if (data.pid_control_enabled) {\n"
+"                pidBtn.textContent = 'Disable PID';\n"
+"                pidBtn.className = 'button danger';\n"
+"            } else {\n"
+"                pidBtn.textContent = 'Enable PID';\n"
+"                pidBtn.className = 'button success';\n"
+"            }\n"
 "        }\n"
 "\n"
 "        function sendCommand(command, value) {\n"
-"            if (ws && ws.readyState === WebSocket.OPEN) {\n"
-"                var cmd = { command: command };\n"
-"                if (value !== null) cmd.value = value;\n"
-"                ws.send(JSON.stringify(cmd));\n"
-"            }\n"
+"            var cmd = { command: command };\n"
+"            if (value !== null) cmd.value = value;\n"
+"            \n"
+"            console.log('Sending command:', JSON.stringify(cmd));\n"
+"            \n"
+"            fetch('/command', {\n"
+"                method: 'POST',\n"
+"                headers: {\n"
+"                    'Content-Type': 'application/json',\n"
+"                },\n"
+"                body: JSON.stringify(cmd)\n"
+"            })\n"
+"            .then(response => response.json())\n"
+"            .then(data => {\n"
+"                console.log('Command sent successfully:', command);\n"
+"            })\n"
+"            .catch(error => {\n"
+"                console.error('Command failed:', error);\n"
+"            });\n"
 "        }\n"
 "\n"
 "        function setDuty() {\n"
 "            var duty = document.getElementById('duty-slider').value;\n"
 "            sendCommand('set_duty', parseInt(duty));\n"
+"            lastUserValues.duty = null; // Allow polling to take over\n"
 "        }\n"
 "\n"
 "        function setBlankingDelay() {\n"
 "            var delay = document.getElementById('blanking-delay-slider').value;\n"
 "            sendCommand('set_blanking_delay', parseInt(delay));\n"
+"            lastUserValues.blanking = null; // Allow polling to take over\n"
 "        }\n"
 "\n"
 "        function setPID() {\n"
@@ -186,10 +300,29 @@ static const char *html_page =
 "            var kd = document.getElementById('pid-kd-slider').value;\n"
 "            var setpoint = document.getElementById('pid-setpoint-slider').value;\n"
 "            \n"
+"            console.log('Setting PID values: Kp=' + kp + ', Ki=' + ki + ', Kd=' + kd + ', Setpoint=' + setpoint);\n"
+"            \n"
+"            // Send commands sequentially with delays\n"
 "            sendCommand('set_pid_kp', parseFloat(kp));\n"
-"            sendCommand('set_pid_ki', parseFloat(ki));\n"
-"            sendCommand('set_pid_kd', parseFloat(kd));\n"
-"            sendCommand('set_pid_setpoint', parseInt(setpoint));\n"
+"            setTimeout(function() {\n"
+"                sendCommand('set_pid_ki', parseFloat(ki));\n"
+"                setTimeout(function() {\n"
+"                    sendCommand('set_pid_kd', parseFloat(kd));\n"
+"                    setTimeout(function() {\n"
+"                        sendCommand('set_pid_setpoint', parseInt(setpoint));\n"
+"                        setTimeout(function() {\n"
+"                            sendCommand('save_pid_settings');\n"
+"                        }, 100);\n"
+"                    }, 100);\n"
+"                }, 100);\n"
+"            }, 100);\n"
+"            \n"
+"            // Allow polling to take over for all PID values\n"
+"            console.log('Resetting lastUserValues for PID sliders');\n"
+"            lastUserValues.kp = null;\n"
+"            lastUserValues.ki = null;\n"
+"            lastUserValues.kd = null;\n"
+"            lastUserValues.setpoint = null;\n"
 "        }\n"
 "\n"
 "        function startCut() {\n"
@@ -218,29 +351,111 @@ static const char *html_page =
 "            }\n"
 "        }\n"
 "\n"
-"        connectWebSocket();\n"
+"        function disablePID() {\n"
+"            sendCommand('disable_pid');\n"
+"        }\n"
+"\n"
+"        function enablePID() {\n"
+"            sendCommand('enable_pid');\n"
+"        }\n"
+"\n"
+"        function togglePID() {\n"
+"            var btn = document.getElementById('pid-toggle-btn');\n"
+"            if (btn.textContent.includes('Enable')) {\n"
+"                sendCommand('enable_pid');\n"
+"            } else {\n"
+"                sendCommand('disable_pid');\n"
+"            }\n"
+"        }\n"
+"\n"
+"        function checkPIDState() {\n"
+"            sendCommand('get_pid_state');\n"
+"        }\n"
+"\n"
+"        function debugSetDuty50() {\n"
+"            sendCommand('debug_set_duty', 50);\n"
+"        }\n"
+"\n"
+"        function debugSetAdc2000() {\n"
+"            sendCommand('debug_set_adc', 2000);\n"
+"        }\n"
+"\n"
+"        function debugDisableAdcOverride() {\n"
+"            sendCommand('debug_disable_adc_override');\n"
+"        }\n"
+"\n"
+"        function debugAllValues() {\n"
+"            sendCommand('debug_all_values');\n"
+"        }\n"
+"\n"
+"        console.log('Page loaded, starting polling updates...');\n"
+"        startPolling();\n"
 "        \n"
-"        document.getElementById('duty-slider').addEventListener('input', function() {\n"
+"        console.log('Setting up event listeners...');\n"
+"        \n"
+"        // Duty cycle slider\n"
+"        var dutySlider = document.getElementById('duty-slider');\n"
+"        dutySlider.addEventListener('mousedown', function() { sliderActive.duty = true; });\n"
+"        dutySlider.addEventListener('mouseup', function() { \n"
+"            sliderActive.duty = false; \n"
+"            lastUserValues.duty = parseInt(this.value);\n"
+"        });\n"
+"        dutySlider.addEventListener('input', function() {\n"
 "            document.getElementById('duty-percent').textContent = this.value + '%';\n"
 "        });\n"
 "        \n"
-"        document.getElementById('blanking-delay-slider').addEventListener('input', function() {\n"
+"        // Blanking delay slider\n"
+"        var blankingSlider = document.getElementById('blanking-delay-slider');\n"
+"        blankingSlider.addEventListener('mousedown', function() { sliderActive.blanking = true; });\n"
+"        blankingSlider.addEventListener('mouseup', function() { \n"
+"            sliderActive.blanking = false; \n"
+"            lastUserValues.blanking = parseInt(this.value);\n"
+"        });\n"
+"        blankingSlider.addEventListener('input', function() {\n"
 "            document.getElementById('blanking-delay').textContent = this.value + ' ticks';\n"
 "        });\n"
 "        \n"
-"        document.getElementById('pid-kp-slider').addEventListener('input', function() {\n"
+"        // PID Kp slider\n"
+"        var kpSlider = document.getElementById('pid-kp-slider');\n"
+"        kpSlider.addEventListener('mousedown', function() { sliderActive.kp = true; });\n"
+"        kpSlider.addEventListener('mouseup', function() { \n"
+"            sliderActive.kp = false; \n"
+"            lastUserValues.kp = parseFloat(this.value);\n"
+"        });\n"
+"        kpSlider.addEventListener('input', function() {\n"
 "            document.getElementById('pid-kp').textContent = parseFloat(this.value).toFixed(3);\n"
 "        });\n"
 "        \n"
-"        document.getElementById('pid-ki-slider').addEventListener('input', function() {\n"
+"        // PID Ki slider\n"
+"        var kiSlider = document.getElementById('pid-ki-slider');\n"
+"        kiSlider.addEventListener('mousedown', function() { sliderActive.ki = true; });\n"
+"        kiSlider.addEventListener('mouseup', function() { \n"
+"            sliderActive.ki = false; \n"
+"            lastUserValues.ki = parseFloat(this.value);\n"
+"        });\n"
+"        kiSlider.addEventListener('input', function() {\n"
 "            document.getElementById('pid-ki').textContent = parseFloat(this.value).toFixed(3);\n"
 "        });\n"
 "        \n"
-"        document.getElementById('pid-kd-slider').addEventListener('input', function() {\n"
+"        // PID Kd slider\n"
+"        var kdSlider = document.getElementById('pid-kd-slider');\n"
+"        kdSlider.addEventListener('mousedown', function() { sliderActive.kd = true; });\n"
+"        kdSlider.addEventListener('mouseup', function() { \n"
+"            sliderActive.kd = false; \n"
+"            lastUserValues.kd = parseFloat(this.value);\n"
+"        });\n"
+"        kdSlider.addEventListener('input', function() {\n"
 "            document.getElementById('pid-kd').textContent = parseFloat(this.value).toFixed(3);\n"
 "        });\n"
 "        \n"
-"        document.getElementById('pid-setpoint-slider').addEventListener('input', function() {\n"
+"        // PID Setpoint slider\n"
+"        var setpointSlider = document.getElementById('pid-setpoint-slider');\n"
+"        setpointSlider.addEventListener('mousedown', function() { sliderActive.setpoint = true; });\n"
+"        setpointSlider.addEventListener('mouseup', function() { \n"
+"            sliderActive.setpoint = false; \n"
+"            lastUserValues.setpoint = parseInt(this.value);\n"
+"        });\n"
+"        setpointSlider.addEventListener('input', function() {\n"
 "            document.getElementById('pid-setpoint').textContent = this.value;\n"
 "        });\n"
 "    </script>\n"
@@ -270,58 +485,61 @@ static esp_err_t create_websocket_frame(const char *payload, size_t payload_len,
 
 // HTTP GET handler for main page
 static esp_err_t root_get_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "Serving main page");
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, html_page, strlen(html_page));
     return ESP_OK;
 }
 
+// Test handler for WebSocket debugging
+static esp_err_t test_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "Test endpoint called");
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, "WebSocket test endpoint working", 30);
+    return ESP_OK;
+}
+
+// Catch-all handler for unknown requests
 // WebSocket upgrade handler
-static esp_err_t websocket_handler(httpd_req_t *req) {
-    if (req->method == HTTP_GET) {
-        // Handle WebSocket upgrade
-        char upgrade_header[64];
-        char connection_header[64];
-        char key_header[64];
-        
-        esp_err_t ret1 = httpd_req_get_hdr_value_str(req, "Upgrade", upgrade_header, sizeof(upgrade_header));
-        esp_err_t ret2 = httpd_req_get_hdr_value_str(req, "Connection", connection_header, sizeof(connection_header));
-        esp_err_t ret3 = httpd_req_get_hdr_value_str(req, "Sec-WebSocket-Key", key_header, sizeof(key_header));
-        
-        if (ret1 != ESP_OK || ret2 != ESP_OK || ret3 != ESP_OK ||
-            strcmp(upgrade_header, "websocket") != 0 ||
-            strstr(connection_header, "Upgrade") == NULL) {
-            return ESP_FAIL;
-        }
-        
-        // Send WebSocket upgrade response
-        char response[256];
-        snprintf(response, sizeof(response),
-                "HTTP/1.1 101 Switching Protocols\r\n"
-                "Upgrade: websocket\r\n"
-                "Connection: Upgrade\r\n"
-                "Sec-WebSocket-Accept: %s\r\n\r\n",
-                key_header); // In production, you should properly hash the key
-        
-        httpd_resp_send(req, response, strlen(response));
-        
-        // Add client to list
-        if (client_count < MAX_CLIENTS) {
-            clients[client_count].fd = httpd_req_to_sockfd(req);
-            clients[client_count].is_websocket = true;
-            clients[client_count].buffer_len = 0;
-            client_count++;
-            ESP_LOGI(TAG, "WebSocket client connected, total: %d", client_count);
-        }
-        
-        return ESP_OK;
+// Status endpoint for polling-based updates
+static esp_err_t status_handler(httpd_req_t *req) {
+    
+    // Create JSON response with current status
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "duty_percent", duty_percent);
+    cJSON_AddNumberToObject(json, "adc_value", adc_value_on_capture);
+    cJSON_AddNumberToObject(json, "gap_voltage", (float)adc_value_on_capture * 3.3f / 4095.0f * 1000.0f);
+    cJSON_AddBoolToObject(json, "is_cutting", false); // TODO: get from main task
+    cJSON_AddBoolToObject(json, "limit_switch_triggered", false); // TODO: get from main task
+    cJSON_AddNumberToObject(json, "jog_speed", 1.0f); // TODO: get from main task
+    cJSON_AddNumberToObject(json, "cut_speed", 0.1f); // TODO: get from main task
+    cJSON_AddNumberToObject(json, "step_position", 0); // TODO: get from main task
+    cJSON_AddBoolToObject(json, "wifi_connected", wifi_is_connected());
+    cJSON_AddNumberToObject(json, "uptime_seconds", (esp_timer_get_time() / 1000000) - system_start_time);
+    cJSON_AddNumberToObject(json, "adc_blanking_delay", adc_blanking_delay_ticks);
+    cJSON_AddNumberToObject(json, "pid_kp", pid_kp);
+    cJSON_AddNumberToObject(json, "pid_ki", pid_ki);
+    cJSON_AddNumberToObject(json, "pid_kd", pid_kd);
+    cJSON_AddNumberToObject(json, "pid_setpoint", pid_setpoint);
+    cJSON_AddBoolToObject(json, "pid_control_enabled", pid_control_enabled);
+    
+    char *json_str = cJSON_Print(json);
+    if (json_str) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+        httpd_resp_send(req, json_str, strlen(json_str));
+        free(json_str);
     }
     
-    return ESP_FAIL;
+    cJSON_Delete(json);
+    return ESP_OK;
 }
 
 // Command processing - now sends commands to main task via queue
 __attribute__((used)) static void process_command(const char *command, const char *value) {
-    ESP_LOGI(TAG, "Received command: %s, value: %s", command, value ? value : "null");
+    ESP_LOGI(TAG, "Processing command: %s, value: %s", command, value ? value : "null");
     
     static edm_settings_t current_settings;
     
@@ -329,13 +547,15 @@ __attribute__((used)) static void process_command(const char *command, const cha
     if (strcmp(command, "set_duty") == 0 && value) {
         int duty = atoi(value);
         if (duty >= 1 && duty <= 99) {
+            int old_duty = duty_percent;
             duty_percent = duty;
-            ESP_LOGI(TAG, "Duty cycle set to %d%%", duty);
+            ESP_LOGI(TAG, "Duty cycle set to %d%% (was %d%%)", duty, old_duty);
             
             // Save to settings
             if (settings_load(&current_settings) == ESP_OK) {
                 current_settings.duty_percent = duty;
                 settings_save(&current_settings);
+                ESP_LOGI(TAG, "Duty cycle saved to settings");
             }
         }
     }
@@ -354,56 +574,74 @@ __attribute__((used)) static void process_command(const char *command, const cha
         }
     }
     // Handle PID parameter settings
-    else if (strcmp(command, "set_pid_kp") == 0 && value) {
-        float kp = atof(value);
-        if (kp >= 0.0f && kp <= 10.0f) {
-            pid_kp = kp;
-            ESP_LOGI(TAG, "PID Kp set to %.3f", kp);
-            
-            // Save to settings
-            if (settings_load(&current_settings) == ESP_OK) {
-                current_settings.pid_kp = kp;
-                settings_save(&current_settings);
+    else if (strcmp(command, "set_pid_kp") == 0) {
+        if (value && strlen(value) > 0) {
+            float kp = atof(value);
+            if (kp >= 0.0f && kp <= 10.0f) {
+                float old_kp = pid_kp;
+                pid_kp = kp;
+                ESP_LOGI(TAG, "PID Kp set to %.3f (was %.3f)", kp, old_kp);
+            } else {
+                ESP_LOGW(TAG, "Invalid Kp value: %s", value);
             }
+        } else {
+            ESP_LOGW(TAG, "Kp value is null or empty");
         }
     }
-    else if (strcmp(command, "set_pid_ki") == 0 && value) {
-        float ki = atof(value);
-        if (ki >= 0.0f && ki <= 10.0f) {
-            pid_ki = ki;
-            ESP_LOGI(TAG, "PID Ki set to %.3f", ki);
-            
-            // Save to settings
-            if (settings_load(&current_settings) == ESP_OK) {
-                current_settings.pid_ki = ki;
-                settings_save(&current_settings);
+    else if (strcmp(command, "set_pid_ki") == 0) {
+        if (value && strlen(value) > 0) {
+            float ki = atof(value);
+            if (ki >= 0.0f && ki <= 10.0f) {
+                pid_ki = ki;
+                ESP_LOGI(TAG, "PID Ki set to %.3f", ki);
+            } else {
+                ESP_LOGW(TAG, "Invalid Ki value: %s", value);
             }
+        } else {
+            ESP_LOGW(TAG, "Ki value is null or empty");
         }
     }
-    else if (strcmp(command, "set_pid_kd") == 0 && value) {
-        float kd = atof(value);
-        if (kd >= 0.0f && kd <= 10.0f) {
-            pid_kd = kd;
-            ESP_LOGI(TAG, "PID Kd set to %.3f", kd);
-            
-            // Save to settings
-            if (settings_load(&current_settings) == ESP_OK) {
-                current_settings.pid_kd = kd;
-                settings_save(&current_settings);
+    else if (strcmp(command, "set_pid_kd") == 0) {
+        if (value && strlen(value) > 0) {
+            float kd = atof(value);
+            if (kd >= 0.0f && kd <= 10.0f) {
+                pid_kd = kd;
+                ESP_LOGI(TAG, "PID Kd set to %.3f", kd);
+            } else {
+                ESP_LOGW(TAG, "Invalid Kd value: %s", value);
             }
+        } else {
+            ESP_LOGW(TAG, "Kd value is null or empty");
         }
     }
-    else if (strcmp(command, "set_pid_setpoint") == 0 && value) {
-        int setpoint = atoi(value);
-        if (setpoint >= 0 && setpoint <= 4095) {
-            pid_setpoint = setpoint;
-            ESP_LOGI(TAG, "PID setpoint set to %d", setpoint);
-            
-            // Save to settings
-            if (settings_load(&current_settings) == ESP_OK) {
-                current_settings.pid_setpoint = setpoint;
-                settings_save(&current_settings);
+    else if (strcmp(command, "set_pid_setpoint") == 0) {
+        if (value && strlen(value) > 0) {
+            int setpoint = atoi(value);
+            if (setpoint >= 0 && setpoint <= 4095) {
+                pid_setpoint = setpoint;
+                ESP_LOGI(TAG, "PID setpoint set to %d", setpoint);
+            } else {
+                ESP_LOGW(TAG, "Invalid setpoint value: %s", value);
             }
+        } else {
+            ESP_LOGW(TAG, "Setpoint value is null or empty");
+        }
+    }
+    // Handle PID settings save
+    else if (strcmp(command, "save_pid_settings") == 0) {
+        ESP_LOGI(TAG, "Saving PID settings to NVS");
+        ESP_LOGI(TAG, "Current memory values: Kp=%.3f, Ki=%.3f, Kd=%.3f, Setpoint=%d",
+                 pid_kp, pid_ki, pid_kd, pid_setpoint);
+        if (settings_load(&current_settings) == ESP_OK) {
+            ESP_LOGI(TAG, "Loaded from NVS: Kp=%.3f, Ki=%.3f, Kd=%.3f, Setpoint=%d",
+                     current_settings.pid_kp, current_settings.pid_ki, current_settings.pid_kd, current_settings.pid_setpoint);
+            current_settings.pid_kp = pid_kp;
+            current_settings.pid_ki = pid_ki;
+            current_settings.pid_kd = pid_kd;
+            current_settings.pid_setpoint = pid_setpoint;
+            settings_save(&current_settings);
+            ESP_LOGI(TAG, "PID settings saved: Kp=%.3f, Ki=%.3f, Kd=%.3f, Setpoint=%d",
+                     pid_kp, pid_ki, pid_kd, pid_setpoint);
         }
     }
     // Handle settings reset
@@ -418,11 +656,187 @@ __attribute__((used)) static void process_command(const char *command, const cha
                 pid_ki = current_settings.pid_ki;
                 pid_kd = current_settings.pid_kd;
                 pid_setpoint = current_settings.pid_setpoint;
+                pid_control_enabled = current_settings.pid_control_enabled;
                 ESP_LOGI(TAG, "Settings reset and reloaded");
             }
         }
     }
+    // Handle ping command for connection testing
+    else if (strcmp(command, "ping") == 0) {
+        ESP_LOGI(TAG, "Received ping command, connection is working");
+    }
+    // Handle PID state query
+    else if (strcmp(command, "get_pid_state") == 0) {
+        ESP_LOGI(TAG, "Current PID state: enabled=%s, duty_percent=%d", 
+                 pid_control_enabled ? "true" : "false", duty_percent);
+    }
+    // Handle debug all values query
+    else if (strcmp(command, "debug_all_values") == 0) {
+        ESP_LOGI(TAG, "DEBUG ALL VALUES:");
+        ESP_LOGI(TAG, "  duty_percent = %d", duty_percent);
+        ESP_LOGI(TAG, "  adc_blanking_delay_ticks = %d", adc_blanking_delay_ticks);
+        ESP_LOGI(TAG, "  pid_kp = %.3f", pid_kp);
+        ESP_LOGI(TAG, "  pid_ki = %.3f", pid_ki);
+        ESP_LOGI(TAG, "  pid_kd = %.3f", pid_kd);
+        ESP_LOGI(TAG, "  pid_setpoint = %d", pid_setpoint);
+        ESP_LOGI(TAG, "  pid_control_enabled = %s", pid_control_enabled ? "true" : "false");
+    }
+    // Handle debug duty cycle set
+    else if (strcmp(command, "debug_set_duty") == 0) {
+        if (value && strlen(value) > 0) {
+            int duty = atoi(value);
+            if (duty >= 1 && duty <= 99) {
+                int old_duty = duty_percent;
+                duty_percent = duty;
+                ESP_LOGI(TAG, "DEBUG: Duty cycle manually set to %d%% (was %d%%)", duty, old_duty);
+            } else {
+                ESP_LOGW(TAG, "Invalid debug duty value: %s", value);
+            }
+        } else {
+            ESP_LOGW(TAG, "Debug duty value is null or empty");
+        }
+    }
+    // Handle debug ADC value set
+    else if (strcmp(command, "debug_set_adc") == 0) {
+        if (value && strlen(value) > 0) {
+            int adc_val = atoi(value);
+            if (adc_val >= 0 && adc_val <= 4095) {
+                extern volatile int adc_value_on_capture;
+                extern volatile bool adc_manual_override;
+                int old_adc = adc_value_on_capture;
+                adc_value_on_capture = adc_val;
+                adc_manual_override = true; // Prevent ADC task from overwriting
+                ESP_LOGI(TAG, "DEBUG: ADC value manually set to %d (was %d), manual override enabled", adc_val, old_adc);
+            } else {
+                ESP_LOGW(TAG, "Invalid debug ADC value: %s (must be 0-4095)", value);
+            }
+        } else {
+            ESP_LOGW(TAG, "Debug ADC value is null or empty");
+        }
+    }
+    // Handle debug ADC manual override disable
+    else if (strcmp(command, "debug_disable_adc_override") == 0) {
+        extern volatile bool adc_manual_override;
+        adc_manual_override = false; // Allow ADC task to resume normal operation
+        ESP_LOGI(TAG, "DEBUG: ADC manual override disabled, returning to normal ADC operation");
+    }
+    // Handle PID control enable/disable
+    else if (strcmp(command, "enable_pid") == 0) {
+        pid_control_enabled = true;
+        ESP_LOGI(TAG, "PID control enabled");
+    }
+    else if (strcmp(command, "disable_pid") == 0) {
+        pid_control_enabled = false;
+        ESP_LOGI(TAG, "PID control disabled");
+    }
+    // Handle EDM cutting commands
+    else if (strcmp(command, "start_cut") == 0) {
+        ESP_LOGI(TAG, "EDM cutting started");
+        // TODO: Implement actual cutting start
+    }
+    else if (strcmp(command, "stop_cut") == 0) {
+        ESP_LOGI(TAG, "EDM cutting stopped");
+        // TODO: Implement actual cutting stop
+    }
+    // Handle jog commands
+    else if (strcmp(command, "jog_up") == 0) {
+        ESP_LOGI(TAG, "Jog up requested");
+        // TODO: Implement jog up
+    }
+    else if (strcmp(command, "jog_down") == 0) {
+        ESP_LOGI(TAG, "Jog down requested");
+        // TODO: Implement jog down
+    }
+    else if (strcmp(command, "home_position") == 0) {
+        ESP_LOGI(TAG, "Home position requested");
+        // TODO: Implement home position
+    }
+    // Catch unrecognized commands
+    else {
+        ESP_LOGW(TAG, "Unrecognized command: %s", command);
+    }
     // Other commands will be handled by the main task through the queue system
+}
+
+// Command endpoint for receiving commands
+static esp_err_t command_handler(httpd_req_t *req) {
+    
+    if (req->method == HTTP_POST) {
+        char content[256];
+        int recv_len = httpd_req_recv(req, content, sizeof(content) - 1);
+        if (recv_len > 0) {
+            content[recv_len] = '\0';
+            
+            // Parse JSON command
+            cJSON *json = cJSON_Parse(content);
+            if (json) {
+                cJSON *command = cJSON_GetObjectItem(json, "command");
+                cJSON *value = cJSON_GetObjectItem(json, "value");
+                
+                ESP_LOGI(TAG, "JSON parsed - command: %s, value type: %d", 
+                         command ? command->valuestring : "null",
+                         value ? value->type : -1);
+                
+                if (command && command->valuestring) {
+                    const char *value_str = NULL;
+                    if (value) {
+                        if (value->type == cJSON_String) {
+                            value_str = value->valuestring;
+                        } else if (value->type == cJSON_Number) {
+                            // Convert number to string
+                            static char num_str[32];
+                            if (value->valuedouble == (double)(int)value->valuedouble) {
+                                snprintf(num_str, sizeof(num_str), "%d", (int)value->valuedouble);
+                            } else {
+                                snprintf(num_str, sizeof(num_str), "%.3f", value->valuedouble);
+                            }
+                            value_str = num_str;
+                        }
+                    }
+                    process_command(command->valuestring, value_str);
+                }
+                
+                cJSON_Delete(json);
+            }
+        }
+    }
+    
+    // Send response
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_send(req, "{\"status\":\"ok\"}", 15);
+    
+    return ESP_OK;
+}
+
+// WebSocket handler (simplified for now)
+static esp_err_t websocket_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "WebSocket handler called - sending fallback response");
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, "WebSocket not implemented yet - use polling endpoints", 47);
+    return ESP_OK;
+}
+
+static esp_err_t catch_all_handler(httpd_req_t *req) {
+    // Log the request for debugging
+    ESP_LOGW(TAG, "Unknown request: %s %s", 
+             req->method == HTTP_GET ? "GET" : 
+             req->method == HTTP_POST ? "POST" : 
+             req->method == HTTP_OPTIONS ? "OPTIONS" : "UNKNOWN",
+             req->uri);
+    
+    // Check if this is a WebSocket request that should be handled
+    if (strcmp(req->uri, "/ws") == 0) {
+        ESP_LOGW(TAG, "WebSocket request caught by catch-all handler - routing to WebSocket handler");
+        // Route to WebSocket handler
+        return websocket_handler(req);
+    }
+    
+    // Return 404 for unknown requests
+    httpd_resp_send_404(req);
+    return ESP_OK;
 }
 
 
@@ -474,20 +888,39 @@ esp_err_t web_server_init(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_SERVER_PORT;
     config.max_uri_handlers = 16;
+    config.max_resp_headers = 8;
+    config.recv_wait_timeout = 30;
+    config.send_wait_timeout = 30;
     
     if (httpd_start(&server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "Error starting server");
         return ESP_FAIL;
     }
     
-    // Register URI handlers
-    httpd_uri_t root_uri = {
-        .uri = "/",
+    // Register URI handlers in order of specificity (most specific first)
+    httpd_uri_t test_uri = {
+        .uri = "/test",
         .method = HTTP_GET,
-        .handler = root_get_handler,
+        .handler = test_handler,
         .user_ctx = NULL
     };
-    httpd_register_uri_handler(server, &root_uri);
+    httpd_register_uri_handler(server, &test_uri);
+    
+    httpd_uri_t status_uri = {
+        .uri = "/status",
+        .method = HTTP_GET,
+        .handler = status_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &status_uri);
+    
+    httpd_uri_t command_uri = {
+        .uri = "/command",
+        .method = HTTP_POST,
+        .handler = command_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &command_uri);
     
     httpd_uri_t ws_uri = {
         .uri = "/ws",
@@ -496,6 +929,23 @@ esp_err_t web_server_init(void) {
         .user_ctx = NULL
     };
     httpd_register_uri_handler(server, &ws_uri);
+    
+    httpd_uri_t root_uri = {
+        .uri = "/",
+        .method = HTTP_GET,
+        .handler = root_get_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &root_uri);
+    
+    // Register catch-all handler for unknown requests (least specific last)
+    httpd_uri_t catch_all_uri = {
+        .uri = "/*",
+        .method = HTTP_GET,
+        .handler = catch_all_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &catch_all_uri);
     
     ESP_LOGI(TAG, "Web server started on port %d", WEB_SERVER_PORT);
     return ESP_OK;

@@ -17,6 +17,7 @@ volatile uint32_t last_pwm_rising_ticks = 0; // Timestamp of last PWM rising edg
 volatile uint32_t last_capture_ticks = 0;
 volatile uint32_t delay_ticks = 0; // Store the interval between PWM and capture
 SemaphoreHandle_t capture_semaphore = NULL;
+volatile bool pid_control_enabled = false; // Flag to enable/disable PID control
 
 // PID control variables - now configurable from web interface
 volatile float pid_kp = 0.05f;   // Proportional gain
@@ -138,13 +139,16 @@ void mcpwm_halfbridge_task(void *pvParameters)
 
     uint32_t period_ticks = timer_config.period_ticks;
 
-    // Soft start: ramp duty from 0 to 40%
-    for (int soft_duty = 0; soft_duty <= 40; soft_duty++) {
+    // Soft start: ramp duty from 0 to current duty_percent
+    int target_duty = duty_percent;
+    for (int soft_duty = 0; soft_duty <= target_duty; soft_duty++) {
         uint32_t duty_ticks = period_ticks * soft_duty / 100;
         ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(comparator, duty_ticks));
         vTaskDelay(pdMS_TO_TICKS(20)); // Adjust delay for ramp speed
     }
-    duty_percent = 40; // Ensure main loop starts at 40%
+    // duty_percent is already set, don't override it
+    ESP_LOGI("MCPWM", "MCPWM task started with duty_percent=%d%%, pid_control_enabled=%s", 
+             duty_percent, pid_control_enabled ? "true" : "false");
 
     // PID control variables
     static double pid_integral = 0;
@@ -157,18 +161,53 @@ void mcpwm_halfbridge_task(void *pvParameters)
         int local_duty = duty_percent;
         if (local_duty < DUTY_MIN) local_duty = DUTY_MIN;
         if (local_duty > DUTY_MAX) local_duty = DUTY_MAX;
+        
+        // Debug: log duty cycle changes (but not too frequently)
+        static int last_logged_duty = -1;
+        static uint32_t last_log_time = 0;
+        uint32_t current_time = xTaskGetTickCount();
+        if (local_duty != last_logged_duty && (current_time - last_log_time) > pdMS_TO_TICKS(5000)) {
+            ESP_LOGI("MCPWM", "Duty cycle: %d%% (PID: %s, ADC: %d)", local_duty, 
+                     pid_control_enabled ? "enabled" : "disabled", adc_value_on_capture);
+            last_logged_duty = local_duty;
+            last_log_time = current_time;
+        }
+        
+        // Special check for duty cycle being reset to 40%
+        static int last_duty_percent = -1;
+        if (duty_percent != last_duty_percent) {
+            if (duty_percent == 40 && last_duty_percent != -1) {
+                ESP_LOGW("MCPWM", "WARNING: Duty cycle reset to 40%% (was %d%%)", last_duty_percent);
+            }
+            last_duty_percent = duty_percent;
+        }
 
         // --- PID control for duty_percent ---
-        int adc_value = adc_value_on_capture;
-        if (adc_value >= 0) {
-            double error = pid_setpoint - adc_value;
-            pid_integral += error;
-            double derivative = error - pid_prev_error;
-            double pid_output = pid_kp * error + pid_ki * pid_integral + pid_kd * derivative;
-            pid_prev_error = error;
-            duty_percent += pid_output;
-            if (duty_percent < DUTY_MIN) duty_percent = DUTY_MIN;
-            if (duty_percent > DUTY_MAX) duty_percent = DUTY_MAX;
+        static bool last_pid_enabled = false;
+        if (pid_control_enabled != last_pid_enabled) {
+            ESP_LOGI("MCPWM", "PID control %s", pid_control_enabled ? "enabled" : "disabled");
+            last_pid_enabled = pid_control_enabled;
+        }
+        
+        if (pid_control_enabled) {
+            int adc_value = adc_value_on_capture;
+            if (adc_value >= 0) {
+                double error = pid_setpoint - adc_value;
+                pid_integral += error;
+                double derivative = error - pid_prev_error;
+                double pid_output = pid_kp * error + pid_ki * pid_integral + pid_kd * derivative;
+                pid_prev_error = error;
+                int old_duty = duty_percent;
+                duty_percent += pid_output;
+                if (duty_percent < DUTY_MIN) duty_percent = DUTY_MIN;
+                if (duty_percent > DUTY_MAX) duty_percent = DUTY_MAX;
+                if (old_duty != duty_percent) {
+                    ESP_LOGI("MCPWM", "PID adjusted duty: %d -> %d (ADC: %d, error: %.1f, output: %.2f)", 
+                             old_duty, duty_percent, adc_value, error, pid_output);
+                }
+            } else {
+                ESP_LOGW("MCPWM", "PID enabled but no ADC value available");
+            }
         }
         // --- End PID control ---
 

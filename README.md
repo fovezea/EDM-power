@@ -41,7 +41,7 @@ There is a lot of documentation and publications out there, but there is still a
 
 ### 📊 **Configurable Parameters**
 - **PWM Duty Cycle**: 1-99% with real-time adjustment
-- **ADC Blanking Delay**: 1-200 ticks for noise filtering
+- **ADC Blanking Delay**: 10-200 ticks for noise filtering
 - **PID Parameters**: 
   - Kp (Proportional): 0.000-1.000
   - Ki (Integral): 0.000-1.000  
@@ -153,7 +153,7 @@ main/
 
 ### **Parameter Configuration**
 - **Duty Cycle Slider**: 1-99% PWM control
-- **ADC Blanking Delay**: 1-200 ticks for noise filtering
+- **ADC Blanking Delay**: 10-200 ticks for noise filtering
 - **PID Tuning**: Real-time adjustment of control parameters
 - **Setpoint Control**: Target ADC value for gap control
 
@@ -260,4 +260,5 @@ Below is a photo of the current hardware setup:
 
 ---
 
+**Note**: This hardware schematic is writen in Kicad 9 but so far is just  power stage control without the reset of the generator. It will be added soon
 **Note**: This system is designed for educational and experimental use. Always follow proper safety procedures when working with high-voltage EDM systems.

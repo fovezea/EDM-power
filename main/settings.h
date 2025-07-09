@@ -16,7 +16,7 @@ extern "C" {
 // Settings structure
 typedef struct {
     int duty_percent;           // PWM duty cycle (1-99)
-    int adc_blanking_delay;     // ADC lead edge blanking delay (1-200 ticks)
+    int adc_blanking_delay;     // ADC lead edge blanking delay (10-200 ticks)
     float jog_speed;            // Jog speed in mm/s
     float cut_speed;            // Cut speed in mm/s
     // PID control parameters
@@ -24,6 +24,7 @@ typedef struct {
     float pid_ki;               // Integral gain
     float pid_kd;               // Derivative gain
     int pid_setpoint;           // Target ADC value
+    bool pid_control_enabled;   // Whether PID control is enabled
     // Add more settings as needed
 } edm_settings_t;
 
@@ -36,7 +37,7 @@ void settings_deinit(void);
 
 // Default settings
 #define DEFAULT_DUTY_PERCENT 40
-#define DEFAULT_ADC_BLANKING_DELAY 1
+#define DEFAULT_ADC_BLANKING_DELAY 10
 #define DEFAULT_JOG_SPEED 1.0f
 #define DEFAULT_CUT_SPEED 0.1f
 // PID default values
@@ -44,6 +45,7 @@ void settings_deinit(void);
 #define DEFAULT_PID_KI 0.01f
 #define DEFAULT_PID_KD 0.0f
 #define DEFAULT_PID_SETPOINT 1500
+#define DEFAULT_PID_CONTROL_ENABLED false
 
 #ifdef __cplusplus
 }
