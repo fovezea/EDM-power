@@ -59,6 +59,11 @@ esp_err_t web_server_start(void);
 esp_err_t web_server_stop(void);
 void web_server_task(void *pvParameters);
 
+// Control functions from main.c
+bool get_web_control_active(void);
+void set_web_control_active(bool active);
+bool get_edm_cutting_status(void);
+
 // External variables that will be updated by main application
 extern volatile int duty_percent;
 extern volatile int adc_value_on_capture;

@@ -12,6 +12,15 @@
 #include <string.h>
 #include "lwip/sockets.h"
 
+// Command structure for web interface
+typedef struct {
+    char command[32];
+    int value;
+} web_command_t;
+
+// External declaration for command queue from main.c
+extern QueueHandle_t command_queue;
+
 static const char *TAG = "web_server";
 
 // Global variables
@@ -109,6 +118,10 @@ static const char *html_page =
 "\n"
 "        <div class=\"control-panel\">\n"
 "            <h3>Control Panel</h3>\n"
+"            <div style=\"margin-bottom: 15px; padding: 10px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px;\">\n"
+"                <strong>Control Mode:</strong> <span id=\"control-mode\" class=\"value-display\">Physical Buttons</span>\n"
+"                <button class=\"button\" id=\"control-toggle-btn\" onclick=\"toggleWebControl()\">Take Web Control</button>\n"
+"            </div>\n"
 "            <button class=\"button success\" onclick=\"startCut()\">Start EDM Cut</button>\n"
 "            <button class=\"button danger\" onclick=\"stopCut()\">Stop EDM Cut</button>\n"
 "            <button class=\"button\" onclick=\"jogUp()\">Jog Up</button>\n"
@@ -258,6 +271,19 @@ static const char *html_page =
 "                pidBtn.textContent = 'Enable PID';\n"
 "                pidBtn.className = 'button success';\n"
 "            }\n"
+"            \n"
+"            // Update control mode display\n"
+"            var controlMode = document.getElementById('control-mode');\n"
+"            var controlBtn = document.getElementById('control-toggle-btn');\n"
+"            if (data.web_control_active) {\n"
+"                controlMode.textContent = 'Web Interface';\n"
+"                controlBtn.textContent = 'Release Control';\n"
+"                controlBtn.className = 'button danger';\n"
+"            } else {\n"
+"                controlMode.textContent = 'Physical Buttons';\n"
+"                controlBtn.textContent = 'Take Web Control';\n"
+"                controlBtn.className = 'button success';\n"
+"            }\n"
 "        }\n"
 "\n"
 "        function sendCommand(command, value) {\n"
@@ -388,6 +414,11 @@ static const char *html_page =
 "            sendCommand('debug_all_values');\n"
 "        }\n"
 "\n"
+"        function toggleWebControl() {\n"
+"            var isWebControl = document.getElementById('control-mode').textContent === 'Web Interface';\n"
+"            sendCommand('web_control', isWebControl ? 0 : 1);\n"
+"        }\n"
+"\n"
 "        console.log('Page loaded, starting polling updates...');\n"
 "        startPolling();\n"
 "        \n"
@@ -509,7 +540,7 @@ static esp_err_t status_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(json, "duty_percent", duty_percent);
     cJSON_AddNumberToObject(json, "adc_value", adc_value_on_capture);
     cJSON_AddNumberToObject(json, "gap_voltage", (float)adc_value_on_capture * 3.3f / 4095.0f * 1000.0f);
-    cJSON_AddBoolToObject(json, "is_cutting", false); // TODO: get from main task
+    cJSON_AddBoolToObject(json, "is_cutting", get_edm_cutting_status());
     cJSON_AddBoolToObject(json, "limit_switch_triggered", false); // TODO: get from main task
     cJSON_AddNumberToObject(json, "jog_speed", 1.0f); // TODO: get from main task
     cJSON_AddNumberToObject(json, "cut_speed", 0.1f); // TODO: get from main task
@@ -522,6 +553,7 @@ static esp_err_t status_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(json, "pid_kd", pid_kd);
     cJSON_AddNumberToObject(json, "pid_setpoint", pid_setpoint);
     cJSON_AddBoolToObject(json, "pid_control_enabled", pid_control_enabled);
+    cJSON_AddBoolToObject(json, "web_control_active", get_web_control_active());
     
     char *json_str = cJSON_Print(json);
     if (json_str) {
@@ -720,6 +752,16 @@ __attribute__((used)) static void process_command(const char *command, const cha
         adc_manual_override = false; // Allow ADC task to resume normal operation
         ESP_LOGI(TAG, "DEBUG: ADC manual override disabled, returning to normal ADC operation");
     }
+    else if (strcmp(command, "debug_set_adc") == 0) {
+        extern volatile int adc_value_on_capture;
+        extern volatile bool adc_manual_override;
+        if (value) {
+            int adc_val = atoi(value);
+            adc_value_on_capture = adc_val;
+            adc_manual_override = true; // Prevent ADC task from overwriting
+            ESP_LOGI(TAG, "DEBUG: ADC value manually set to %d", adc_val);
+        }
+    }
     // Handle PID control enable/disable
     else if (strcmp(command, "enable_pid") == 0) {
         pid_control_enabled = true;
@@ -732,24 +774,90 @@ __attribute__((used)) static void process_command(const char *command, const cha
     // Handle EDM cutting commands
     else if (strcmp(command, "start_cut") == 0) {
         ESP_LOGI(TAG, "EDM cutting started");
-        // TODO: Implement actual cutting start
+        // Send command to main task queue
+        extern QueueHandle_t command_queue;
+        if (command_queue) {
+            web_command_t cmd;
+            strncpy(cmd.command, "start_cut", sizeof(cmd.command) - 1);
+            cmd.command[sizeof(cmd.command) - 1] = '\0';
+            cmd.value = 0;
+            if (xQueueSend(command_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+                ESP_LOGE(TAG, "Failed to send start_cut command to queue");
+            }
+        }
     }
     else if (strcmp(command, "stop_cut") == 0) {
         ESP_LOGI(TAG, "EDM cutting stopped");
-        // TODO: Implement actual cutting stop
+        // Send command to main task queue
+        extern QueueHandle_t command_queue;
+        if (command_queue) {
+            web_command_t cmd;
+            strncpy(cmd.command, "stop_cut", sizeof(cmd.command) - 1);
+            cmd.command[sizeof(cmd.command) - 1] = '\0';
+            cmd.value = 0;
+            if (xQueueSend(command_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+                ESP_LOGE(TAG, "Failed to send stop_cut command to queue");
+            }
+        }
     }
     // Handle jog commands
     else if (strcmp(command, "jog_up") == 0) {
         ESP_LOGI(TAG, "Jog up requested");
-        // TODO: Implement jog up
+        // Send command to main task queue
+        extern QueueHandle_t command_queue;
+        if (command_queue) {
+            web_command_t cmd;
+            strncpy(cmd.command, "jog_up", sizeof(cmd.command) - 1);
+            cmd.command[sizeof(cmd.command) - 1] = '\0';
+            cmd.value = 0;
+            if (xQueueSend(command_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+                ESP_LOGE(TAG, "Failed to send jog_up command to queue");
+            }
+        }
     }
     else if (strcmp(command, "jog_down") == 0) {
         ESP_LOGI(TAG, "Jog down requested");
-        // TODO: Implement jog down
+        // Send command to main task queue
+        extern QueueHandle_t command_queue;
+        if (command_queue) {
+            web_command_t cmd;
+            strncpy(cmd.command, "jog_down", sizeof(cmd.command) - 1);
+            cmd.command[sizeof(cmd.command) - 1] = '\0';
+            cmd.value = 0;
+            if (xQueueSend(command_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+                ESP_LOGE(TAG, "Failed to send jog_down command to queue");
+            }
+        }
     }
     else if (strcmp(command, "home_position") == 0) {
         ESP_LOGI(TAG, "Home position requested");
-        // TODO: Implement home position
+        // Send command to main task queue
+        extern QueueHandle_t command_queue;
+        if (command_queue) {
+            web_command_t cmd;
+            strncpy(cmd.command, "home_position", sizeof(cmd.command) - 1);
+            cmd.command[sizeof(cmd.command) - 1] = '\0';
+            cmd.value = 0;
+            if (xQueueSend(command_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+                ESP_LOGE(TAG, "Failed to send home_position command to queue");
+            }
+        }
+    }
+    // Handle web control toggle
+    else if (strcmp(command, "web_control") == 0) {
+        int control_value = value ? atoi(value) : 0;
+        ESP_LOGI(TAG, "Web control toggle requested: %s", control_value ? "enable" : "disable");
+        // Send command to main task queue
+        extern QueueHandle_t command_queue;
+        if (command_queue) {
+            web_command_t cmd;
+            strncpy(cmd.command, "web_control", sizeof(cmd.command) - 1);
+            cmd.command[sizeof(cmd.command) - 1] = '\0';
+            cmd.value = control_value;
+            if (xQueueSend(command_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+                ESP_LOGE(TAG, "Failed to send web_control command to queue");
+            }
+        }
     }
     // Catch unrecognized commands
     else {

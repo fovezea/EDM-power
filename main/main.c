@@ -66,7 +66,8 @@ static volatile bool edm_cutting_enabled = false;
 static volatile bool jog_up_requested = false;
 static volatile bool jog_down_requested = false;
 static volatile bool home_position_requested = false;
-static QueueHandle_t command_queue = NULL;
+static volatile bool web_control_active = false; // Default: physical buttons in control
+QueueHandle_t command_queue = NULL;
 
 // Command structure for web interface
 typedef struct {
@@ -76,6 +77,7 @@ typedef struct {
 
 // Web server task function declaration
 void web_server_task(void *pvParameters);
+extern esp_err_t web_server_init(void);
 
 // Local static/global variables (defined in this file and actually used)
 static rmt_channel_handle_t motor_chan;
@@ -106,6 +108,15 @@ bool get_home_position_requested(void) {
     return requested;
 }
 
+bool get_web_control_active(void) {
+    return web_control_active;
+}
+
+void set_web_control_active(bool active) {
+    web_control_active = active;
+    ESP_LOGI(TAG, "Control switched to: %s", active ? "WEB" : "PHYSICAL");
+}
+
 // Web server integration task
 void web_integration_task(void *pvParameters)
 {
@@ -117,22 +128,33 @@ void web_integration_task(void *pvParameters)
     // Initialize WiFi first
     esp_err_t wifi_ret = wifi_init_sta();
     if (wifi_ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to connect to WiFi, continuing without web interface");
-        return;
+        ESP_LOGE(TAG, "Failed to connect to WiFi, web interface will not be available");
+    } else {
+        ESP_LOGI(TAG, "WiFi connected successfully");
+        
+        // Wait a bit for WiFi to stabilize
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        
+        // Initialize web server
+        esp_err_t web_ret = web_server_start();
+        if (web_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to start web server, retrying...");
+            // Wait and retry once
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            web_ret = web_server_start();
+            if (web_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Web server start failed after retry, continuing without web interface");
+            } else {
+                ESP_LOGI(TAG, "Web server started successfully after retry");
+                xTaskCreate(web_server_task, "web_server_task", 8192, NULL, 4, NULL);
+                ESP_LOGI(TAG, "Access the EDM control interface at: http://[ESP32_IP_ADDRESS]");
+            }
+        } else {
+            ESP_LOGI(TAG, "Web server started successfully");
+            xTaskCreate(web_server_task, "web_server_task", 8192, NULL, 4, NULL);
+            ESP_LOGI(TAG, "Access the EDM control interface at: http://[ESP32_IP_ADDRESS]");
+        }
     }
-    
-    // Initialize web server
-    esp_err_t web_ret = web_server_start();
-    if (web_ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start web server");
-        return;
-    }
-    
-    // Create web server task
-    xTaskCreate(web_server_task, "web_server_task", 8192, NULL, 4, NULL);
-    
-    ESP_LOGI(TAG, "Web server started successfully");
-    ESP_LOGI(TAG, "Access the EDM control interface at: http://[ESP32_IP_ADDRESS]");
     
     // Main integration loop
     while (1) {
@@ -159,6 +181,9 @@ void web_integration_task(void *pvParameters)
             } else if (strcmp(cmd.command, "home_position") == 0) {
                 home_position_requested = true;
                 ESP_LOGI(TAG, "Home position requested via web interface");
+            } else if (strcmp(cmd.command, "web_control") == 0) {
+                set_web_control_active(cmd.value != 0);
+                ESP_LOGI(TAG, "Web control %s via web interface", cmd.value != 0 ? "enabled" : "disabled");
             }
         }
         
@@ -289,25 +314,51 @@ void stepper_task(void *pvParameters)
     int jogging = 0; // 0: not jogging, 1: up, -1: down
     bool encoder_running = false; // Track if encoder is running
     while (1) {
-        int jog_up = gpio_get_level(JOG_UP_GPIO);
-        int jog_down = gpio_get_level(JOG_DOWN_GPIO);
+        // Read physical inputs first
+        int physical_jog_up = gpio_get_level(JOG_UP_GPIO);
+        int physical_jog_down = gpio_get_level(JOG_DOWN_GPIO);
         int limit_switch = gpio_get_level(LIMIT_SWITCH_GPIO); // 1 = OK, 0 = limit hit
-        int start_cut = gpio_get_level(START_CUT_GPIO);       // 1 = start, 0 = stop
+        int physical_start_cut = gpio_get_level(START_CUT_GPIO); // 1 = start, 0 = stop
         
-        // Check for web interface commands
-        if (get_jog_up_requested()) {
-            // ESP_LOGI(TAG, "Executing jog up from web interface");
-            jog_up = 1; // Simulate button press
-        }
+        // Initialize control variables
+        int jog_up = 0;
+        int jog_down = 0;
+        int start_cut = 0;
         
-        if (get_jog_down_requested()) {
-            // ESP_LOGI(TAG, "Executing jog down from web interface");
-            jog_down = 1; // Simulate button press
-        }
-        
-        // Check if EDM cutting is enabled via web interface
-        if (get_edm_cutting_status()) {
-            start_cut = 1; // Simulate button press
+        // Determine control source based on web_control_active flag
+        if (web_control_active) {
+            // Web interface has control
+            if (get_jog_up_requested()) {
+                ESP_LOGI(TAG, "Executing jog up from web interface");
+                jog_up = 1;
+            }
+            
+            if (get_jog_down_requested()) {
+                ESP_LOGI(TAG, "Executing jog down from web interface");
+                jog_down = 1;
+            }
+            
+            // Web interface controls EDM cutting
+            if (edm_cutting_enabled) {
+                start_cut = 1;
+                static bool log_web_start = true;
+                if (log_web_start) {
+                    ESP_LOGI(TAG, "EDM cutting enabled via web interface");
+                    log_web_start = false;
+                }
+            } else {
+                start_cut = 0;
+                static bool log_web_stop = true;
+                if (log_web_stop && edm_cutting_enabled != 0) {
+                    ESP_LOGI(TAG, "EDM cutting stopped via web interface");
+                    log_web_stop = false;
+                }
+            }
+        } else {
+            // Physical buttons have control (default)
+            jog_up = physical_jog_up;
+            jog_down = physical_jog_down;
+            start_cut = physical_start_cut;
         }
 
       
@@ -335,13 +386,24 @@ void stepper_task(void *pvParameters)
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             encoder_running = true;
             // Keep jogging at constant speed while button is held
-            while (gpio_get_level(JOG_UP_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
-                //ESP_LOGI(TAG, "Jog UP: uniform phase");
-                // Use a large step burst for smooth continuous motion
-                steps = 1;
-                ESP_ERROR_CHECK(rmt_transmit(motor_chan, jog_motor_encoder, &steps, sizeof(steps), &tx_config));
-                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
-                // No artificial delay for smoothest motion
+            // Check control mode to determine how to detect button release
+            if (web_control_active) {
+                // For web control, jog for a short burst only (web buttons are momentary)
+                for (int i = 0; i < 10 && gpio_get_level(LIMIT_SWITCH_GPIO); i++) {
+                    steps = 1;
+                    ESP_ERROR_CHECK(rmt_transmit(motor_chan, jog_motor_encoder, &steps, sizeof(steps), &tx_config));
+                    ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                    vTaskDelay(pdMS_TO_TICKS(10)); // Add delay to avoid WDT
+                }
+            } else {
+                // For physical buttons, continue while button is held
+                while (gpio_get_level(JOG_UP_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
+                    //ESP_LOGI(TAG, "Jog UP: uniform phase");
+                    steps = 1;
+                    ESP_ERROR_CHECK(rmt_transmit(motor_chan, jog_motor_encoder, &steps, sizeof(steps), &tx_config));
+                    ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                    vTaskDelay(pdMS_TO_TICKS(5)); // Add small delay to avoid WDT
+                }
             }
             // ESP_LOGI(TAG, "Jog UP: decel phase");
             steps = 1;
@@ -358,12 +420,24 @@ void stepper_task(void *pvParameters)
             ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
             encoder_running = true;
             // Keep jogging at constant speed while button is held
-            while (gpio_get_level(JOG_DOWN_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
-                //ESP_LOGI(TAG, "Jog DOWN: uniform phase");
-                steps = 1;
-                ESP_ERROR_CHECK(rmt_transmit(motor_chan, jog_motor_encoder, &steps, sizeof(steps), &tx_config));
-                ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
-                // No artificial delay for smoothest motion
+            // Check control mode to determine how to detect button release
+            if (web_control_active) {
+                // For web control, jog for a short burst only (web buttons are momentary)
+                for (int i = 0; i < 10 && gpio_get_level(LIMIT_SWITCH_GPIO); i++) {
+                    steps = 1;
+                    ESP_ERROR_CHECK(rmt_transmit(motor_chan, jog_motor_encoder, &steps, sizeof(steps), &tx_config));
+                    ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                    vTaskDelay(pdMS_TO_TICKS(10)); // Add delay to avoid WDT
+                }
+            } else {
+                // For physical buttons, continue while button is held
+                while (gpio_get_level(JOG_DOWN_GPIO) && gpio_get_level(LIMIT_SWITCH_GPIO)) {
+                    //ESP_LOGI(TAG, "Jog DOWN: uniform phase");
+                    steps = 1;
+                    ESP_ERROR_CHECK(rmt_transmit(motor_chan, jog_motor_encoder, &steps, sizeof(steps), &tx_config));
+                    ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                    vTaskDelay(pdMS_TO_TICKS(5)); // Add small delay to avoid WDT
+                }
             }
             // ESP_LOGI(TAG, "Jog DOWN: decel phase");
             steps = 1;
@@ -375,18 +449,34 @@ void stepper_task(void *pvParameters)
             // ESP_LOGI(TAG, "Start EDM cut");
             // int delay_ticks = 0; // Removed: delay_ticks no longer used
             int gap_voltage = adc_value_on_capture;
-            // ESP_LOGI(TAG, "DEBUG: gap_voltage=%d", gap_voltage); // Debug print
+            
+            // Check if ADC value is valid
+            if (gap_voltage == -1) {
+                ESP_LOGW(TAG, "EDM: Invalid ADC value (-1), skipping control");
+                vTaskDelay(pdMS_TO_TICKS(20));
+                continue;
+            }
+            
+            // Debug logging for ADC values
+            static uint32_t last_debug_time = 0;
+            uint32_t current_time = xTaskGetTickCount();
+            if (current_time - last_debug_time > pdMS_TO_TICKS(2000)) { // Log every 2 seconds
+                ESP_LOGI(TAG, "EDM DEBUG: gap_voltage=%d, LOW_VOLTAGE=%d, HIGH_VOLTAGE=%d, limit_switch=%d, start_cut=%d", 
+                         gap_voltage, LOW_VOLTAGE, HIGH_VOLTAGE, limit_switch, start_cut);
+                last_debug_time = current_time;
+            }
+            
             // Control logic
             int step_direction = 0;
             if (gap_voltage < LOW_VOLTAGE) {
                 step_direction = -1;
-                 // ESP_LOGI(TAG, "EDM: Too close, retracting electrode");
+                ESP_LOGI(TAG, "EDM: Too close (ADC=%d < %d), retracting electrode", gap_voltage, LOW_VOLTAGE);
             } else if (gap_voltage > HIGH_VOLTAGE) {
                 step_direction = 1;
-                 // ESP_LOGI(TAG, "EDM: Too far, advancing electrode");
+                ESP_LOGI(TAG, "EDM: Too far (ADC=%d > %d), advancing electrode", gap_voltage, HIGH_VOLTAGE);
             } else {
                 step_direction = 0;
-                 // ESP_LOGI(TAG, "EDM: Gap OK, holding position");
+                // ESP_LOGI(TAG, "EDM: Gap OK (ADC=%d), holding position", gap_voltage);
             }
             // Move stepper based on step_direction
             if (step_direction == -1) {
@@ -417,7 +507,13 @@ void stepper_task(void *pvParameters)
                 encoder_running = true;
             } // else hold (do nothing)
             vTaskDelay(pdMS_TO_TICKS(20)); // Always yield to avoid WDT
+        } else {
+            // If no action is taken, ensure we still yield to avoid WDT
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
+        
+        // Guarantee minimum delay in all paths to prevent watchdog timeout
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
 }
@@ -471,4 +567,7 @@ void app_main(void)
     // Start web server integration task
     xTaskCreate(web_integration_task, "web_integration_task", 8192, NULL, 2, NULL);
     ESP_LOGI(TAG, "Web integration task started");
+    
+    // The web_integration_task handles WiFi and web server initialization
+    ESP_LOGI(TAG, "WiFi and web server will be started by web_integration_task");
 }
