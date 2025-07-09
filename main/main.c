@@ -16,6 +16,12 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 
+// Web server and WiFi includes
+#include "wifi_connect.h"
+#include "web_server.h"
+#include "freertos/queue.h"
+#include <string.h>
+
 ///////////////////////////////Change the following configurations according to your board//////////////////////////////
 #define STEP_MOTOR_GPIO_EN       0
 #define STEP_MOTOR_GPIO_DIR      2
@@ -53,11 +59,110 @@ extern void adc_on_capture_task(void *pvParameters);
 extern void mcpwm_halfbridge_task(void *pvParameters);
 extern void adc_oneshot_init(void); // Add extern for ADC init
 
+// Web server integration variables
+static volatile bool edm_cutting_enabled = false;
+static volatile bool jog_up_requested = false;
+static volatile bool jog_down_requested = false;
+static volatile bool home_position_requested = false;
+static QueueHandle_t command_queue = NULL;
+
+// Command structure for web interface
+typedef struct {
+    char command[32];
+    int value;
+} web_command_t;
+
+// Web server task function declaration
+void web_server_task(void *pvParameters);
+
 // Local static/global variables (defined in this file and actually used)
 static rmt_channel_handle_t motor_chan;
 static rmt_encoder_handle_t accel_motor_encoder;
 static rmt_encoder_handle_t uniform_motor_encoder;
 static rmt_encoder_handle_t decel_motor_encoder;
+
+// Web server integration functions
+bool get_edm_cutting_status(void) {
+    return edm_cutting_enabled;
+}
+
+bool get_jog_up_requested(void) {
+    bool requested = jog_up_requested;
+    jog_up_requested = false; // Clear the request
+    return requested;
+}
+
+bool get_jog_down_requested(void) {
+    bool requested = jog_down_requested;
+    jog_down_requested = false; // Clear the request
+    return requested;
+}
+
+bool get_home_position_requested(void) {
+    bool requested = home_position_requested;
+    home_position_requested = false; // Clear the request
+    return requested;
+}
+
+// Web server integration task
+void web_integration_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "Web integration task started");
+    
+    // Create command queue
+    command_queue = xQueueCreate(10, sizeof(web_command_t));
+    
+    // Initialize WiFi first
+    esp_err_t wifi_ret = wifi_init_sta();
+    if (wifi_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to connect to WiFi, continuing without web interface");
+        return;
+    }
+    
+    // Initialize web server
+    esp_err_t web_ret = web_server_start();
+    if (web_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start web server");
+        return;
+    }
+    
+    // Create web server task
+    xTaskCreate(web_server_task, "web_server_task", 8192, NULL, 4, NULL);
+    
+    ESP_LOGI(TAG, "Web server started successfully");
+    ESP_LOGI(TAG, "Access the EDM control interface at: http://[ESP32_IP_ADDRESS]");
+    
+    // Main integration loop
+    while (1) {
+        // Process commands from web interface
+        web_command_t cmd;
+        if (xQueueReceive(command_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
+            ESP_LOGI(TAG, "Processing web command: %s, value: %d", cmd.command, cmd.value);
+            
+            if (strcmp(cmd.command, "set_duty") == 0) {
+                duty_percent = cmd.value;
+                ESP_LOGI(TAG, "Duty cycle set to %d%% via web interface", cmd.value);
+            } else if (strcmp(cmd.command, "start_cut") == 0) {
+                edm_cutting_enabled = true;
+                ESP_LOGI(TAG, "EDM cutting started via web interface");
+            } else if (strcmp(cmd.command, "stop_cut") == 0) {
+                edm_cutting_enabled = false;
+                ESP_LOGI(TAG, "EDM cutting stopped via web interface");
+            } else if (strcmp(cmd.command, "jog_up") == 0) {
+                jog_up_requested = true;
+                ESP_LOGI(TAG, "Jog up requested via web interface");
+            } else if (strcmp(cmd.command, "jog_down") == 0) {
+                jog_down_requested = true;
+                ESP_LOGI(TAG, "Jog down requested via web interface");
+            } else if (strcmp(cmd.command, "home_position") == 0) {
+                home_position_requested = true;
+                ESP_LOGI(TAG, "Home position requested via web interface");
+            }
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(100)); // Check every 100ms
+    }
+}
 
 // The task function
 void stepper_task(void *pvParameters)
@@ -186,6 +291,22 @@ void stepper_task(void *pvParameters)
         int jog_down = gpio_get_level(JOG_DOWN_GPIO);
         int limit_switch = gpio_get_level(LIMIT_SWITCH_GPIO); // 1 = OK, 0 = limit hit
         int start_cut = gpio_get_level(START_CUT_GPIO);       // 1 = start, 0 = stop
+        
+        // Check for web interface commands
+        if (get_jog_up_requested()) {
+            ESP_LOGI(TAG, "Executing jog up from web interface");
+            jog_up = 1; // Simulate button press
+        }
+        
+        if (get_jog_down_requested()) {
+            ESP_LOGI(TAG, "Executing jog down from web interface");
+            jog_down = 1; // Simulate button press
+        }
+        
+        // Check if EDM cutting is enabled via web interface
+        if (get_edm_cutting_status()) {
+            start_cut = 1; // Simulate button press
+        }
 
       
         // If limit switch is OFF, inhibit all movement
@@ -302,7 +423,8 @@ void stepper_task(void *pvParameters)
 void app_main(void)
 {
     pwm_adc_queue = xQueueCreate(1, sizeof(int));
-    // Create the task
+    
+    // Create the main EDM tasks
     xTaskCreate(stepper_task, "stepper_task", 4096, NULL, 5, NULL);
     ESP_LOGI(TAG, "Stepper motor example started");
 
@@ -311,4 +433,8 @@ void app_main(void)
 
     // Start MCPWM task for power train
     xTaskCreate(mcpwm_halfbridge_task, "mcpwm_halfbridge_task", 4096, NULL, 5, NULL);
+    
+    // Start web server integration task
+    xTaskCreate(web_integration_task, "web_integration_task", 8192, NULL, 2, NULL);
+    ESP_LOGI(TAG, "Web integration task started");
 }
