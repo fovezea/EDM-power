@@ -1,5 +1,5 @@
 /*
- * WiFi Integration Example for EDM Power Project
+ * WiFi Integration for EDM Power Project
  * This file shows how to integrate WiFi functionality into your main application
  */
 
@@ -8,12 +8,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static const char *TAG = "wifi_example";
+static const char *TAG = "wifi";
 
-// Example task that demonstrates WiFi usage
-void wifi_example_task(void *pvParameters)
+// Task that demonstrates WiFi usage
+void wifi_task(void *pvParameters)
 {
-    ESP_LOGI(TAG, "Starting WiFi example task");
+    ESP_LOGI(TAG, "Starting WiFi task");
     
     // Initialize WiFi
     esp_err_t ret = wifi_init_sta();
@@ -66,7 +66,7 @@ void app_main(void)
     xTaskCreate(mcpwm_halfbridge_task, "mcpwm_halfbridge_task", 4096, NULL, 5, NULL);
     
     // Add WiFi functionality
-    xTaskCreate(wifi_example_task, "wifi_example_task", 4096, NULL, 3, NULL);
-    ESP_LOGI(TAG, "WiFi example task started");
+    xTaskCreate(wifi_task, "wifi_task", 4096, NULL, 3, NULL);
+    ESP_LOGI(TAG, "WiFi task started");
 }
 */ 

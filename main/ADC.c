@@ -4,7 +4,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_adc/adc_oneshot.h"
-#include "esp_task_wdt.h"
 
 static const char *TAG = "adc_cali";
 
@@ -30,9 +29,6 @@ void adc_on_capture_task(void *pvParameters)
     const int MAX_JUMP = 200; // Max allowed jump between samples
     
     ESP_LOGI(TAG, "ADC capture task started");
-    
-    // Try to disable watchdog for this task
-    esp_task_wdt_delete(NULL);
     
     while (1) {
         // Always yield control at the start of each loop

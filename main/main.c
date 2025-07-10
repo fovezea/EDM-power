@@ -452,7 +452,7 @@ void stepper_task(void *pvParameters)
             
             // Check if ADC value is valid
             if (gap_voltage == -1) {
-                ESP_LOGW(TAG, "EDM: Invalid ADC value (-1), skipping control");
+                // ESP_LOGW(TAG, "EDM: Invalid ADC value (-1), skipping control");
                 vTaskDelay(pdMS_TO_TICKS(20));
                 continue;
             }
@@ -470,10 +470,10 @@ void stepper_task(void *pvParameters)
             int step_direction = 0;
             if (gap_voltage < LOW_VOLTAGE) {
                 step_direction = -1;
-                ESP_LOGI(TAG, "EDM: Too close (ADC=%d < %d), retracting electrode", gap_voltage, LOW_VOLTAGE);
+                // ESP_LOGI(TAG, "EDM: Too close (ADC=%d < %d), retracting electrode", gap_voltage, LOW_VOLTAGE);
             } else if (gap_voltage > HIGH_VOLTAGE) {
                 step_direction = 1;
-                ESP_LOGI(TAG, "EDM: Too far (ADC=%d > %d), advancing electrode", gap_voltage, HIGH_VOLTAGE);
+                // ESP_LOGI(TAG, "EDM: Too far (ADC=%d > %d), advancing electrode", gap_voltage, HIGH_VOLTAGE);
             } else {
                 step_direction = 0;
                 // ESP_LOGI(TAG, "EDM: Gap OK (ADC=%d), holding position", gap_voltage);

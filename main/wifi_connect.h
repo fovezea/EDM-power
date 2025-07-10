@@ -17,10 +17,10 @@ extern "C" {
 #endif
 
 // WiFi configuration
-//#define WIFI_SSID "403"  // Replace with your WiFi SSID
-//#define WIFI_PASS "12345678"  // Replace with your WiFi password  
-#define WIFI_SSID "apacalda"  // Replace with your WiFi SSID
-#define WIFI_PASS "apacaldahaideshimdighel"  // Replace with your WiFi password 
+//#define WIFI_SSID "apacalda"  // Replace with your WiFi SSID
+//#define WIFI_PASS "apacaldahaideshimdighel"  // Replace with your WiFi password 
+#define WIFI_SSID "403"  // Replace with your WiFi SSID
+#define WIFI_PASS "12345678"  // Replace with your WiFi password 
 #define WIFI_MAXIMUM_RETRY 5
 
 // Event group to signal when we are connected

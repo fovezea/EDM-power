@@ -1,5 +1,5 @@
 /*
- * Web Server Integration Example for EDM Power Project
+ * Web Server Integration for EDM Power Project
  * This file shows how to integrate the web server with your main application
  */
 
@@ -140,7 +140,7 @@ void app_main(void)
     xTaskCreate(mcpwm_halfbridge_task, "mcpwm_halfbridge_task", 4096, NULL, 5, NULL);
     
     // Initialize WiFi first
-    xTaskCreate(wifi_example_task, "wifi_example_task", 4096, NULL, 3, NULL);
+    xTaskCreate(wifi_task, "wifi_task", 4096, NULL, 3, NULL);
     ESP_LOGI(TAG, "WiFi task started");
     
     // Start web server integration
