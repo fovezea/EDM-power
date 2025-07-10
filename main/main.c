@@ -44,7 +44,7 @@
 double jog_speed_mm_per_s = 1; // Speed in mm/s, can be set from elsewhere
 double cut_speed_mm_per_s = 0.1; // Speed in mm/s, can be set from elsewhere
 double leadscrew_pitch_mm = 4.0; // Leadscrew pitch in mm/rev
-double steps_per_rev = 200; // Pulses per revolution (e.g., 200 for 1.8 degree stepper)
+double steps_per_rev = 2000; // Pulses per revolution (e.g., 200 for 1.8 degree stepper)
 
 static const char *TAG = "main";
 
@@ -84,6 +84,11 @@ static rmt_channel_handle_t motor_chan;
 static rmt_encoder_handle_t accel_motor_encoder;
 static rmt_encoder_handle_t uniform_motor_encoder;
 static rmt_encoder_handle_t decel_motor_encoder;
+static rmt_encoder_handle_t cut_motor_encoder = NULL;
+// Pre-configured cut encoders for different speeds
+static rmt_encoder_handle_t cut_encoder_slow = NULL;    // 0.01-0.1 mm/s
+static rmt_encoder_handle_t cut_encoder_medium = NULL;  // 0.1-0.5 mm/s  
+static rmt_encoder_handle_t cut_encoder_fast = NULL;    // 0.5-1.0 mm/s
 
 // Web server integration functions
 bool get_edm_cutting_status(void) {
@@ -113,8 +118,44 @@ bool get_web_control_active(void) {
 }
 
 void set_web_control_active(bool active) {
+    if (active && !web_control_active) {
+        // When switching to web control, inherit the current physical cutting state
+        int physical_start_cut = gpio_get_level(START_CUT_GPIO);
+        edm_cutting_enabled = (physical_start_cut == 1);
+        ESP_LOGI(TAG, "Taking web control - inherited cutting state: %s", 
+                 edm_cutting_enabled ? "CUTTING" : "STOPPED");
+    }
+    
     web_control_active = active;
     ESP_LOGI(TAG, "Control switched to: %s", active ? "WEB" : "PHYSICAL");
+}
+
+// Function to select appropriate pre-configured encoder based on cut speed
+void update_cut_motor_encoder(void) {
+    ESP_LOGI(TAG, "=== Selecting cut motor encoder ===");
+    ESP_LOGI(TAG, "Current cut_speed_mm_per_s: %.3f", cut_speed_mm_per_s);
+    
+    rmt_encoder_handle_t old_encoder = cut_motor_encoder;
+    
+    // Select encoder based on speed range
+    if (cut_speed_mm_per_s <= 0.1) {
+        cut_motor_encoder = cut_encoder_slow;
+        ESP_LOGI(TAG, "Selected SLOW encoder for %.3f mm/s", cut_speed_mm_per_s);
+    } else if (cut_speed_mm_per_s <= 0.5) {
+        cut_motor_encoder = cut_encoder_medium;
+        ESP_LOGI(TAG, "Selected MEDIUM encoder for %.3f mm/s", cut_speed_mm_per_s);
+    } else {
+        cut_motor_encoder = cut_encoder_fast;
+        ESP_LOGI(TAG, "Selected FAST encoder for %.3f mm/s", cut_speed_mm_per_s);
+    }
+    
+    if (cut_motor_encoder == NULL) {
+        ESP_LOGE(TAG, "✗ Selected encoder is NULL! Falling back to uniform encoder");
+        cut_motor_encoder = uniform_motor_encoder;
+    } else {
+        ESP_LOGI(TAG, "✓ Cut encoder selected: old=%p, new=%p", old_encoder, cut_motor_encoder);
+    }
+    ESP_LOGI(TAG, "=== Encoder selection complete ===");
 }
 
 // Web server integration task
@@ -161,7 +202,7 @@ void web_integration_task(void *pvParameters)
         // Process commands from web interface
         web_command_t cmd;
         if (xQueueReceive(command_queue, &cmd, pdMS_TO_TICKS(100)) == pdTRUE) {
-            ESP_LOGI(TAG, "Processing web command: %s, value: %d", cmd.command, cmd.value);
+            // ESP_LOGI(TAG, "Processing web command: %s, value: %d", cmd.command, cmd.value);
             
             if (strcmp(cmd.command, "set_duty") == 0) {
                 duty_percent = cmd.value;
@@ -184,6 +225,15 @@ void web_integration_task(void *pvParameters)
             } else if (strcmp(cmd.command, "web_control") == 0) {
                 set_web_control_active(cmd.value != 0);
                 ESP_LOGI(TAG, "Web control %s via web interface", cmd.value != 0 ? "enabled" : "disabled");
+            } else if (strcmp(cmd.command, "set_cut_speed") == 0) {
+                // cut_speed_mm_per_s is already updated by web_server.c
+                // Always update encoder immediately - it's safe between RMT transmissions
+                ESP_LOGI(TAG, "Cut speed change - updating encoder immediately");
+                update_cut_motor_encoder();
+                ESP_LOGI(TAG, "Cut speed updated to %.3f mm/s via web interface", cut_speed_mm_per_s);
+            } else if (strcmp(cmd.command, "set_jog_speed") == 0) {
+                // jog_speed_mm_per_s is already updated by web_server.c
+                ESP_LOGI(TAG, "Jog speed updated to %.3f mm/s via web interface", jog_speed_mm_per_s);
             }
         }
         
@@ -294,6 +344,54 @@ void stepper_task(void *pvParameters)
         return;
     }
 
+    // Create pre-configured cut motor encoders for different speed ranges
+    ESP_LOGI(TAG, "Creating pre-configured cut encoders");
+    
+    // Calculate actual frequencies based on current parameters
+    // Using: freq = (speed_mm_per_s * steps_per_rev) / leadscrew_pitch_mm
+    uint32_t slow_freq = (uint32_t)((0.05 * steps_per_rev) / leadscrew_pitch_mm);   // 0.05 mm/s = 25 Hz
+    uint32_t medium_freq = (uint32_t)((0.2 * steps_per_rev) / leadscrew_pitch_mm); // 0.2 mm/s = 100 Hz  
+    uint32_t fast_freq = (uint32_t)((1.0 * steps_per_rev) / leadscrew_pitch_mm);   // 1.0 mm/s = 500 Hz
+    
+    // Ensure minimum frequency to prevent extremely long step pulses
+    // Use higher minimum to ensure reasonable step pulse timing even at very low speeds
+    if (slow_freq < 100) slow_freq = 100;      // Minimum 100Hz = 5ms step period
+    if (medium_freq < 100) medium_freq = 100;
+    if (fast_freq < 100) fast_freq = 100;
+    
+    ESP_LOGI(TAG, "Calculated encoder frequencies: slow=%lu Hz, medium=%lu Hz, fast=%lu Hz", 
+             (unsigned long)slow_freq, (unsigned long)medium_freq, (unsigned long)fast_freq);
+    
+    // Slow encoder: for 0.01-0.1 mm/s range
+    stepper_motor_curve_encoder_config_t slow_config = {0};
+    slow_config.resolution = STEP_MOTOR_RESOLUTION_HZ;
+    slow_config.sample_points = 2;
+    slow_config.start_freq_hz = slow_freq;
+    slow_config.end_freq_hz = slow_freq - 1;
+    ESP_ERROR_CHECK(rmt_new_stepper_motor_curve_encoder(&slow_config, &cut_encoder_slow));
+    ESP_LOGI(TAG, "Slow cut encoder created: %p (%lu Hz)", cut_encoder_slow, (unsigned long)slow_freq);
+    
+    // Medium encoder: for 0.1-0.5 mm/s range
+    stepper_motor_curve_encoder_config_t medium_config = {0};
+    medium_config.resolution = STEP_MOTOR_RESOLUTION_HZ;
+    medium_config.sample_points = 2;
+    medium_config.start_freq_hz = medium_freq;
+    medium_config.end_freq_hz = medium_freq - 1;
+    ESP_ERROR_CHECK(rmt_new_stepper_motor_curve_encoder(&medium_config, &cut_encoder_medium));
+    ESP_LOGI(TAG, "Medium cut encoder created: %p (%lu Hz)", cut_encoder_medium, (unsigned long)medium_freq);
+    
+    // Fast encoder: for 0.5-1.0 mm/s range
+    stepper_motor_curve_encoder_config_t fast_config = {0};
+    fast_config.resolution = STEP_MOTOR_RESOLUTION_HZ;
+    fast_config.sample_points = 2;
+    fast_config.start_freq_hz = fast_freq;
+    fast_config.end_freq_hz = fast_freq - 1;
+    ESP_ERROR_CHECK(rmt_new_stepper_motor_curve_encoder(&fast_config, &cut_encoder_fast));
+    ESP_LOGI(TAG, "Fast cut encoder created: %p (%lu Hz)", cut_encoder_fast, (unsigned long)fast_freq);
+    
+    // Select initial cut motor encoder
+    update_cut_motor_encoder();
+
     // ESP_LOGI(TAG, "Enable RMT channel");
     // Debug: print motor_chan handle before enabling
     // ESP_LOGI(TAG, "motor_chan handle: %p", motor_chan);
@@ -320,6 +418,15 @@ void stepper_task(void *pvParameters)
         int limit_switch = gpio_get_level(LIMIT_SWITCH_GPIO); // 1 = OK, 0 = limit hit
         int physical_start_cut = gpio_get_level(START_CUT_GPIO); // 1 = start, 0 = stop
         
+        // Debug physical button states
+        static int last_jog_up = -1, last_jog_down = -1;
+        if (physical_jog_up != last_jog_up || physical_jog_down != last_jog_down) {
+            // ESP_LOGI(TAG, "Physical buttons: jog_up=%d, jog_down=%d, web_control=%s", 
+            //          physical_jog_up, physical_jog_down, web_control_active ? "ACTIVE" : "INACTIVE");
+            last_jog_up = physical_jog_up;
+            last_jog_down = physical_jog_down;
+        }
+        
         // Initialize control variables
         int jog_up = 0;
         int jog_down = 0;
@@ -329,12 +436,12 @@ void stepper_task(void *pvParameters)
         if (web_control_active) {
             // Web interface has control
             if (get_jog_up_requested()) {
-                ESP_LOGI(TAG, "Executing jog up from web interface");
+                // ESP_LOGI(TAG, "Executing jog up from web interface");
                 jog_up = 1;
             }
             
             if (get_jog_down_requested()) {
-                ESP_LOGI(TAG, "Executing jog down from web interface");
+                // ESP_LOGI(TAG, "Executing jog down from web interface");
                 jog_down = 1;
             }
             
@@ -343,14 +450,14 @@ void stepper_task(void *pvParameters)
                 start_cut = 1;
                 static bool log_web_start = true;
                 if (log_web_start) {
-                    ESP_LOGI(TAG, "EDM cutting enabled via web interface");
+                    // ESP_LOGI(TAG, "EDM cutting enabled via web interface");
                     log_web_start = false;
                 }
             } else {
                 start_cut = 0;
                 static bool log_web_stop = true;
                 if (log_web_stop && edm_cutting_enabled != 0) {
-                    ESP_LOGI(TAG, "EDM cutting stopped via web interface");
+                    // ESP_LOGI(TAG, "EDM cutting stopped via web interface");
                     log_web_stop = false;
                 }
             }
@@ -447,20 +554,26 @@ void stepper_task(void *pvParameters)
             jogging = 0;
         } else if (!jogging && limit_switch && start_cut) {
             // ESP_LOGI(TAG, "Start EDM cut");
+            // Ensure we have a cut encoder (only create if NULL)
+            if (cut_motor_encoder == NULL) {
+                ESP_LOGE(TAG, "Cut encoder is NULL - recreating it");
+                update_cut_motor_encoder();
+            }
+            
             // int delay_ticks = 0; // Removed: delay_ticks no longer used
             int gap_voltage = adc_value_on_capture;
             
             // Check if ADC value is valid
             if (gap_voltage == -1) {
                 // ESP_LOGW(TAG, "EDM: Invalid ADC value (-1), skipping control");
-                vTaskDelay(pdMS_TO_TICKS(20));
+                vTaskDelay(pdMS_TO_TICKS(2)); // Fast reaction even for invalid readings
                 continue;
             }
             
-            // Debug logging for ADC values
+            // Debug logging for ADC values (reduced frequency for performance)
             static uint32_t last_debug_time = 0;
             uint32_t current_time = xTaskGetTickCount();
-            if (current_time - last_debug_time > pdMS_TO_TICKS(2000)) { // Log every 2 seconds
+            if (current_time - last_debug_time > pdMS_TO_TICKS(5000)) { // Log every 5 seconds (reduced from 2s)
                 ESP_LOGI(TAG, "EDM DEBUG: gap_voltage=%d, LOW_VOLTAGE=%d, HIGH_VOLTAGE=%d, limit_switch=%d, start_cut=%d", 
                          gap_voltage, LOW_VOLTAGE, HIGH_VOLTAGE, limit_switch, start_cut);
                 last_debug_time = current_time;
@@ -481,35 +594,103 @@ void stepper_task(void *pvParameters)
             // Move stepper based on step_direction
             if (step_direction == -1) {
                 gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_COUNTERCLOCKWISE);
-                uint32_t steps = 5;
-                if (motor_chan == NULL || uniform_motor_encoder == NULL) {
-                    ESP_LOGE(TAG, "motor_chan or uniform_motor_encoder is NULL!");
-                } else {
-                    esp_err_t tx_err = rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), &tx_config);
-                    if (tx_err != ESP_OK) {
-                        ESP_LOGE(TAG, "rmt_transmit failed: %s", esp_err_to_name(tx_err));
+                
+                // Calculate exact steps per loop for smooth motion
+                // Loop frequency: 500Hz (2ms), Target: cut_speed_mm_per_s
+                // Formula: steps_per_loop = (speed_mm_per_s * steps_per_rev) / (leadscrew_pitch_mm * loop_freq_hz)
+                static float step_accumulator = 0.0f;
+                const float loop_freq_hz = 500.0f;  // 2ms loop = 500Hz
+                
+                float steps_per_loop = (cut_speed_mm_per_s * steps_per_rev) / (leadscrew_pitch_mm * loop_freq_hz);
+                step_accumulator += steps_per_loop;
+                
+                uint32_t steps = (uint32_t)step_accumulator;
+                if (steps > 0) {
+                    step_accumulator -= steps;  // Keep fractional part for next loop
+                    
+                    // Limit to maximum 5 steps per transmission to prevent encoder timing issues
+                    if (steps > 5) {
+                        step_accumulator += (steps - 5);  // Put excess back in accumulator
+                        steps = 5;
                     }
-                    ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                    
+                    if (motor_chan == NULL || cut_motor_encoder == NULL) {
+                        ESP_LOGE(TAG, "EDM RETRACT FAILED: motor_chan=%p, cut_motor_encoder=%p", motor_chan, cut_motor_encoder);
+                        if (cut_motor_encoder == NULL) {
+                            ESP_LOGE(TAG, "Cut encoder is NULL - attempting emergency recreation");
+                            update_cut_motor_encoder();
+                            if (cut_motor_encoder != NULL) {
+                                ESP_LOGI(TAG, "Emergency encoder recreation successful, retrying transmission");
+                                esp_err_t tx_err = rmt_transmit(motor_chan, cut_motor_encoder, &steps, sizeof(steps), &tx_config);
+                                if (tx_err == ESP_OK) {
+                                    ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                                } else {
+                                    ESP_LOGE(TAG, "Emergency transmission also failed: %s", esp_err_to_name(tx_err));
+                                }
+                            }
+                        }
+                    } else {
+                        esp_err_t tx_err = rmt_transmit(motor_chan, cut_motor_encoder, &steps, sizeof(steps), &tx_config);
+                        if (tx_err != ESP_OK) {
+                            ESP_LOGE(TAG, "EDM RETRACT rmt_transmit failed: %s", esp_err_to_name(tx_err));
+                        } else {
+                            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                        }
+                    }
                 }
                 encoder_running = true;
             } else if (step_direction == 1) {
                 gpio_set_level(STEP_MOTOR_GPIO_DIR, STEP_MOTOR_SPIN_DIR_CLOCKWISE);
-                uint32_t steps = 5;
-                if (motor_chan == NULL || uniform_motor_encoder == NULL) {
-                    ESP_LOGE(TAG, "motor_chan or uniform_motor_encoder is NULL!");
-                } else {
-                    esp_err_t tx_err = rmt_transmit(motor_chan, uniform_motor_encoder, &steps, sizeof(steps), &tx_config);
-                    if (tx_err != ESP_OK) {
-                        ESP_LOGE(TAG, "rmt_transmit failed: %s", esp_err_to_name(tx_err));
+                
+                // Calculate exact steps per loop for smooth motion
+                // Loop frequency: 500Hz (2ms), Target: cut_speed_mm_per_s
+                // Formula: steps_per_loop = (speed_mm_per_s * steps_per_rev) / (leadscrew_pitch_mm * loop_freq_hz)
+                static float advance_step_accumulator = 0.0f;
+                const float loop_freq_hz = 500.0f;  // 2ms loop = 500Hz
+                
+                float steps_per_loop = (cut_speed_mm_per_s * steps_per_rev) / (leadscrew_pitch_mm * loop_freq_hz);
+                advance_step_accumulator += steps_per_loop;
+                
+                uint32_t steps = (uint32_t)advance_step_accumulator;
+                if (steps > 0) {
+                    advance_step_accumulator -= steps;  // Keep fractional part for next loop
+                    
+                    // Limit to maximum 5 steps per transmission to prevent encoder timing issues
+                    if (steps > 5) {
+                        advance_step_accumulator += (steps - 5);  // Put excess back in accumulator
+                        steps = 5;
                     }
-                    ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                    
+                    if (motor_chan == NULL || cut_motor_encoder == NULL) {
+                        ESP_LOGE(TAG, "EDM ADVANCE FAILED: motor_chan=%p, cut_motor_encoder=%p", motor_chan, cut_motor_encoder);
+                        if (cut_motor_encoder == NULL) {
+                            ESP_LOGE(TAG, "Cut encoder is NULL - attempting emergency recreation");
+                            update_cut_motor_encoder();
+                            if (cut_motor_encoder != NULL) {
+                                ESP_LOGI(TAG, "Emergency encoder recreation successful, retrying transmission");
+                                esp_err_t tx_err = rmt_transmit(motor_chan, cut_motor_encoder, &steps, sizeof(steps), &tx_config);
+                                if (tx_err == ESP_OK) {
+                                    ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                                } else {
+                                    ESP_LOGE(TAG, "Emergency transmission also failed: %s", esp_err_to_name(tx_err));
+                                }
+                            }
+                        }
+                    } else {
+                        esp_err_t tx_err = rmt_transmit(motor_chan, cut_motor_encoder, &steps, sizeof(steps), &tx_config);
+                        if (tx_err != ESP_OK) {
+                            ESP_LOGE(TAG, "EDM ADVANCE rmt_transmit failed: %s", esp_err_to_name(tx_err));
+                        } else {
+                            ESP_ERROR_CHECK(rmt_tx_wait_all_done(motor_chan, -1));
+                        }
+                    }
                 }
                 encoder_running = true;
             } // else hold (do nothing)
-            vTaskDelay(pdMS_TO_TICKS(20)); // Always yield to avoid WDT
+            vTaskDelay(pdMS_TO_TICKS(2)); // Fast EDM reaction time (500 Hz control loop)
         } else {
             // If no action is taken, ensure we still yield to avoid WDT
-            vTaskDelay(pdMS_TO_TICKS(10));
+            vTaskDelay(pdMS_TO_TICKS(2)); // Keep consistent timing
         }
         
         // Guarantee minimum delay in all paths to prevent watchdog timeout

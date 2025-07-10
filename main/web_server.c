@@ -683,8 +683,8 @@ static esp_err_t status_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(json, "gap_voltage", (float)adc_value_on_capture * 3.3f / 4095.0f * 1000.0f);
     cJSON_AddBoolToObject(json, "is_cutting", get_edm_cutting_status());
     cJSON_AddBoolToObject(json, "limit_switch_triggered", false); // TODO: get from main task
-    cJSON_AddNumberToObject(json, "jog_speed", 1.0f); // TODO: get from main task
-    cJSON_AddNumberToObject(json, "cut_speed", 0.1f); // TODO: get from main task
+    cJSON_AddNumberToObject(json, "jog_speed", jog_speed_mm_per_s);
+    cJSON_AddNumberToObject(json, "cut_speed", cut_speed_mm_per_s);
     cJSON_AddNumberToObject(json, "step_position", 0); // TODO: get from main task
     cJSON_AddBoolToObject(json, "wifi_connected", wifi_is_connected());
     cJSON_AddNumberToObject(json, "uptime_seconds", (esp_timer_get_time() / 1000000) - system_start_time);
@@ -750,16 +750,46 @@ __attribute__((used)) static void process_command(const char *command, const cha
     else if (strcmp(command, "set_cut_speed") == 0 && value) {
         float speed = atof(value);
         if (speed >= 0.01f && speed <= 1.0f) { // Range from 0.01 to 1.0 mm/s
-            // TODO: Store cut speed in global variable and save to settings
-            ESP_LOGI(TAG, "Cut speed set to %.2f mm/s", speed);
+            double old_speed = cut_speed_mm_per_s;
+            cut_speed_mm_per_s = speed;
+            ESP_LOGI(TAG, "Cut speed set to %.3f mm/s (was %.3f mm/s)", speed, old_speed);
             
-            // For now, just log the setting - you can add storage later
-            // if (settings_load(&current_settings) == ESP_OK) {
-            //     current_settings.cut_speed = speed;
-            //     settings_save(&current_settings);
-            // }
+            // Send command to main task queue to update encoder
+            extern QueueHandle_t command_queue;
+            if (command_queue) {
+                web_command_t cmd;
+                strncpy(cmd.command, "set_cut_speed", sizeof(cmd.command) - 1);
+                cmd.command[sizeof(cmd.command) - 1] = '\0';
+                cmd.value = (int)(speed * 1000); // Send as integer (speed * 1000)
+                if (xQueueSend(command_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+                    ESP_LOGE(TAG, "Failed to send set_cut_speed command to queue");
+                }
+            }
         } else {
             ESP_LOGW(TAG, "Invalid cut speed value: %s (must be 0.01-1.0)", value);
+        }
+    }
+    // Handle jog speed setting
+    else if (strcmp(command, "set_jog_speed") == 0 && value) {
+        float speed = atof(value);
+        if (speed >= 0.1f && speed <= 10.0f) { // Range from 0.1 to 10.0 mm/s
+            double old_speed = jog_speed_mm_per_s;
+            jog_speed_mm_per_s = speed;
+            ESP_LOGI(TAG, "Jog speed set to %.3f mm/s (was %.3f mm/s)", speed, old_speed);
+            
+            // Send command to main task queue for future jog encoder updates
+            extern QueueHandle_t command_queue;
+            if (command_queue) {
+                web_command_t cmd;
+                strncpy(cmd.command, "set_jog_speed", sizeof(cmd.command) - 1);
+                cmd.command[sizeof(cmd.command) - 1] = '\0';
+                cmd.value = (int)(speed * 1000); // Send as integer (speed * 1000)
+                if (xQueueSend(command_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+                    ESP_LOGE(TAG, "Failed to send set_jog_speed command to queue");
+                }
+            }
+        } else {
+            ESP_LOGW(TAG, "Invalid jog speed value: %s (must be 0.1-10.0)", value);
         }
     }
     // Handle PID parameter settings

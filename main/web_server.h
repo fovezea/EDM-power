@@ -74,6 +74,8 @@ extern volatile float pid_kd;
 extern volatile int pid_setpoint;
 extern volatile bool pid_control_enabled;
 extern SemaphoreHandle_t capture_semaphore;
+extern double cut_speed_mm_per_s;
+extern double jog_speed_mm_per_s;
 
 #ifdef __cplusplus
 }
